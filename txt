@@ -1,5 +1,261 @@
-@echo off
-:loop
-powershell -command "$wsh = New-Object -ComObject WScript.Shell; Add-Type -AssemblyName System.Windows.Forms; $orig = [System.Windows.Forms.Cursor]::Position; $wsh.SendKeys('{SCROLLLOCK}'); $points = @( @(10,0), @(10,10), @(0,10), @(0,0) ); foreach($d in $points) { [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point($orig.X + $d[0], $orig.Y + $d[1]); Sleep -Milliseconds 300 }; [System.Windows.Forms.Cursor]::Position = $orig"
-timeout /t 300 /nobreak >nul
-goto loop
+from flask import Flask, request, jsonify, render_template_string
+from datetime import datetime
+import threading
+import webbrowser
+import socket
+
+app = Flask(__name__)
+tickets = []
+
+# ================== HTML ШАБЛОНЫ ==================
+# Форма для клиентов
+CLIENT_FORM = """
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Заявка в IT</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Segoe UI', sans-serif; background: #e9ecef; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+        .container { background: white; padding: 30px; border-radius: 12px; box-shadow: 0 8px 30px rgba(0,0,0,0.12); width: 100%; max-width: 500px; }
+        h2 { text-align: center; color: #333; margin-bottom: 20px; }
+        label { display: block; margin-top: 14px; font-weight: 600; color: #495057; font-size: 0.9em; }
+        label .required { color: #dc3545; }
+        input, select, textarea { width: 100%; padding: 10px 12px; margin-top: 4px; border: 1px solid #ced4da; border-radius: 6px; font-size: 14px; transition: border-color 0.2s; font-family: inherit; }
+        input:focus, select:focus, textarea:focus { outline: none; border-color: #4dabf7; box-shadow: 0 0 0 3px rgba(77,171,247,0.15); }
+        textarea { resize: vertical; min-height: 100px; }
+        .checkbox-group { display: flex; align-items: center; margin-top: 16px; }
+        .checkbox-group input { width: auto; margin-right: 10px; accent-color: #dc3545; transform: scale(1.2); }
+        .checkbox-group label { margin-top: 0; color: #dc3545; cursor: pointer; }
+        button { width: 100%; padding: 12px; margin-top: 22px; background: #007bff; color: white; border: none; border-radius: 6px; font-size: 16px; font-weight: 600; cursor: pointer; transition: background 0.2s; }
+        button:hover { background: #0056b3; }
+        button:active { transform: scale(0.98); }
+        #message { margin-top: 15px; padding: 12px; border-radius: 6px; text-align: center; display: none; font-weight: 500; }
+        .success { background: #d4edda; color: #155724; display: block !important; }
+        .error { background: #f8d7da; color: #721c24; display: block !important; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>🔧 Заявка на ремонт</h2>
+        <form id="ticketForm">
+            <!-- 1. Филиал -->
+            <label><span class="required">*</span> Филиал</label>
+            <select id="branch" required>
+                <option value="">-- Выберите филиал --</option>
+                <option>№3</option>
+                <option>Анастасьевна</option>
+                <option>Аян</option>
+                <option>Бычиха</option>
+                <option>Восточное</option>
+                <option>Галкино</option>
+                <option>Дружба</option>
+                <option>Елабуга</option>
+                <option>Ильинка</option>
+                <option>Князе-Волконское</option>
+                <option>Корфовский</option>
+                <option>Краснореченское</option>
+                <option>Кукан</option>
+                <option>Мирное</option>
+                <option>Мичуринское</option>
+                <option>Некрасовка</option>
+                <option>Нелькан</option>
+                <option>Осиновая речка</option>
+                <option>Ракитное</option>
+                <option>Сергеевка</option>
+                <option>Тополево</option>
+                <option>Чумикан</option>
+            </select>
+
+            <!-- 2. Фамилия и Имя -->
+            <label><span class="required">*</span> Фамилия и Имя</label>
+            <input type="text" id="full_name" placeholder="Например: Иванов Иван" required>
+
+            <!-- 3. Рабочее место -->
+            <label><span class="required">*</span> Рабочее место</label>
+            <input type="text" id="workplace" placeholder="Например: Обработка, 3 место" required>
+
+            <!-- 4. Поломка -->
+            <label><span class="required">*</span> Описание поломки</label>
+            <textarea id="description" placeholder="Опишите подробно, что случилось..." required></textarea>
+
+            <!-- Срочность -->
+            <div class="checkbox-group">
+                <input type="checkbox" id="urgent">
+                <label for="urgent">⚠️ Срочная заявка</label>
+            </div>
+
+            <button type="submit">📨 Отправить заявку</button>
+            <div id="message"></div>
+        </form>
+    </div>
+
+    <script>
+        document.getElementById('ticketForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const msgDiv = document.getElementById('message');
+            msgDiv.className = '';
+            msgDiv.style.display = 'none';
+
+            const data = {
+                branch: document.getElementById('branch').value.trim(),
+                full_name: document.getElementById('full_name').value.trim(),
+                workplace: document.getElementById('workplace').value.trim(),
+                description: document.getElementById('description').value.trim(),
+                urgent: document.getElementById('urgent').checked
+            };
+
+            // Проверка обязательных полей
+            if (!data.branch || !data.full_name || !data.workplace || !data.description) {
+                msgDiv.className = 'error';
+                msgDiv.textContent = '❌ Заполните все обязательные поля!';
+                return;
+            }
+
+            try {
+                const res = await fetch('/submit_ticket', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                const result = await res.json();
+                if (res.ok) {
+                    msgDiv.className = 'success';
+                    msgDiv.textContent = '✅ Заявка успешно отправлена!';
+                    document.getElementById('ticketForm').reset();
+                } else {
+                    throw new Error(result.message || 'Ошибка сервера');
+                }
+            } catch (err) {
+                msgDiv.className = 'error';
+                msgDiv.textContent = '❌ ' + err.message;
+            }
+        });
+    </script>
+</body>
+</html>
+"""
+
+# Панель мониторинга для вас
+ADMIN_PANEL = """
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Панель IT-специалиста</title>
+    <meta http-equiv="refresh" content="15">
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; background: #f1f3f5; padding: 20px; }
+        h1 { color: #212529; display: flex; align-items: center; gap: 10px; }
+        .controls { margin-bottom: 20px; display: flex; gap: 10px; flex-wrap: wrap; }
+        button { padding: 10px 18px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 14px; transition: opacity 0.2s; }
+        button:hover { opacity: 0.85; }
+        .btn-clear { background: #dc3545; color: white; }
+        .btn-refresh { background: #007bff; color: white; }
+        .btn-sound { background: #6c757d; color: white; }
+        .ticket { background: white; padding: 16px; margin-bottom: 12px; border-radius: 8px; box-shadow: 0 2px 6px rgba(0,0,0,0.08); border-left: 5px solid #007bff; transition: transform 0.1s; }
+        .ticket:hover { transform: translateX(3px); }
+        .ticket.urgent { border-left-color: #dc3545; background: #fff5f5; animation: pulse 2s infinite; }
+        @keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(220,53,69,0.4); } 50% { box-shadow: 0 0 0 8px rgba(220,53,69,0); } }
+        .ticket-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 6px; flex-wrap: wrap; gap: 8px; }
+        .ticket-header strong { font-size: 1.1em; }
+        .badge { padding: 3px 10px; border-radius: 12px; font-size: 0.8em; font-weight: bold; white-space: nowrap; }
+        .badge-urgent { background: #dc3545; color: white; }
+        .badge-normal { background: #e9ecef; color: #495057; }
+        .meta { color: #868e96; font-size: 0.85em; margin-top: 5px; display: flex; gap: 15px; flex-wrap: wrap; }
+        .desc { color: #343a40; margin-top: 8px; white-space: pre-wrap; background: #f8f9fa; padding: 10px; border-radius: 6px; font-size: 0.95em; }
+        .time { color: #adb5bd; font-size: 0.8em; margin-top: 8px; }
+        .empty { text-align: center; color: #adb5bd; padding: 40px; font-size: 1.1em; }
+        .counter { background: #007bff; color: white; padding: 3px 12px; border-radius: 15px; font-size: 0.85em; }
+    </style>
+</head>
+<body>
+    <h1>🖥️ Поступившие заявки <span class="counter">{{ tickets|length }}</span></h1>
+    <div class="controls">
+        <button class="btn-refresh" onclick="location.reload()">🔄 Обновить</button>
+        <button class="btn-clear" onclick="clearTickets()">🗑️ Очистить всё</button>
+    </div>
+    <div id="tickets-container">
+        {% for ticket in tickets|reverse %}
+            <div class="ticket {% if ticket.urgent %}urgent{% endif %}">
+                <div class="ticket-header">
+                    <strong>👤 {{ ticket.full_name }}</strong>
+                    {% if ticket.urgent %}
+                        <span class="badge badge-urgent">⚠️ СРОЧНО</span>
+                    {% else %}
+                        <span class="badge badge-normal">Обычная</span>
+                    {% endif %}
+                </div>
+                <div class="meta">
+                    <span>🏢 {{ ticket.branch }}</span>
+                    <span>📍 {{ ticket.workplace }}</span>
+                </div>
+                <div class="desc">{{ ticket.description }}</div>
+                <div class="time">🕒 {{ ticket.time }}</div>
+            </div>
+        {% else %}
+            <div class="empty">✨ Заявок пока нет. Ждём...</div>
+        {% endfor %}
+    </div>
+
+    <script>
+        async function clearTickets() {
+            if (confirm('Удалить ВСЕ заявки?')) {
+                await fetch('/clear', { method: 'POST' });
+                location.reload();
+            }
+        }
+    </script>
+</body>
+</html>
+"""
+
+# ================== МАРШРУТЫ ==================
+@app.route('/')
+def client_form():
+    return render_template_string(CLIENT_FORM)
+
+@app.route('/admin')
+def admin_panel():
+    return render_template_string(ADMIN_PANEL, tickets=tickets)
+
+@app.route('/submit_ticket', methods=['POST'])
+def submit_ticket():
+    data = request.get_json()
+    
+    # Проверка обязательных полей
+    required = ['branch', 'full_name', 'workplace', 'description']
+    for field in required:
+        if not data or not data.get(field):
+            return jsonify({"status": "error", "message": f"Поле '{field}' обязательно!"}), 400
+    
+    data['time'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    tickets.append(data)
+    
+    print(f"🔥 НОВАЯ ЗАЯВКА | {data['full_name']} | {data['branch']} | {data['workplace']}")
+    print(f"   Поломка: {data['description'][:60]}...")
+    return jsonify({"status": "ok", "message": "Заявка принята!"}), 200
+
+@app.route('/clear', methods=['POST'])
+def clear():
+    count = len(tickets)
+    tickets.clear()
+    print(f"🗑️ Очищено {count} заявок")
+    return jsonify({"status": "ok"}), 200
+
+if __name__ == '__main__':
+    hostname = socket.gethostname()
+    local_ip = socket.gethostbyname(hostname)
+    
+    print("=" * 60)
+    print("🖥️  СЕРВЕР ЗАЯВОК ЗАПУЩЕН")
+    print("=" * 60)
+    print(f"📋 Панель мониторинга (для вас): http://127.0.0.1:8080/admin")
+    print(f"📝 Форма для клиентов:          http://{local_ip}:8080/")
+    print(f"🌐 Разошлите клиентам ссылку:   http://{local_ip}:8080/")
+    print("=" * 60)
+    
+    threading.Timer(1.5, lambda: webbrowser.open("http://127.0.0.1:8080/admin")).start()
+    app.run(host='0.0.0.0', port=8080, debug=False)
