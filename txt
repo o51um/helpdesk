@@ -18,7 +18,7 @@ call_log = []
 
 # ================ HTML СТРАНИЦЫ ================
 
-# 1. КЛИЕНТСКАЯ ФОРМА (ТОЛЬКО ВЫБОР ОКНА)
+# 1. КЛИЕНТСКАЯ ФОРМА (ВЫБОР ОКНА + ТЕКСТ)
 CLIENT_PAGE = """
 <!DOCTYPE html>
 <html>
@@ -116,28 +116,48 @@ CLIENT_PAGE = """
             border-radius: 20px;
             margin-left: 5px;
         }
-        .call-btn {
+        
+        /* Поле для текста */
+        .message-area {
+            margin: 15px 0;
+            text-align: left;
+        }
+        .message-area label {
+            display: block;
+            font-weight: 600;
+            color: #555;
+            margin-bottom: 5px;
+            font-size: 14px;
+        }
+        .message-area textarea {
             width: 100%;
-            padding: 18px;
-            background: linear-gradient(135deg, #ff6b6b 0%, #ee5a24 100%);
-            color: white;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 12px;
+            font-size: 15px;
+            font-family: inherit;
+            resize: vertical;
+            min-height: 60px;
+            max-height: 120px;
+            transition: border-color 0.3s;
+        }
+        .message-area textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        .message-area .char-count {
+            text-align: right;
+            font-size: 12px;
+            color: #999;
+            margin-top: 3px;
+        }
+        
+        .divider {
             border: none;
-            border-radius: 15px;
-            font-size: 22px;
-            font-weight: 700;
-            cursor: pointer;
-            transition: all 0.3s;
-            margin-top: 15px;
+            border-top: 2px dashed #e0e0e0;
+            margin: 20px 0;
         }
-        .call-btn:hover:not(:disabled) {
-            transform: translateY(-3px);
-            box-shadow: 0 8px 25px rgba(238, 90, 36, 0.5);
-        }
-        .call-btn:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-            transform: none;
-        }
+        
         .selected-display {
             padding: 12px;
             background: #f0f2ff;
@@ -153,6 +173,30 @@ CLIENT_PAGE = """
         .selected-display .test-name {
             color: #ee5a24;
         }
+        
+        .call-btn {
+            width: 100%;
+            padding: 18px;
+            background: linear-gradient(135deg, #ff6b6b 0%, #ee5a24 100%);
+            color: white;
+            border: none;
+            border-radius: 15px;
+            font-size: 22px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.3s;
+            margin-top: 10px;
+        }
+        .call-btn:hover:not(:disabled) {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 25px rgba(238, 90, 36, 0.5);
+        }
+        .call-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
         #status {
             margin-top: 15px;
             padding: 12px;
@@ -170,17 +214,12 @@ CLIENT_PAGE = """
             background: #f8d7da;
             color: #721c24;
         }
-        .divider {
-            border: none;
-            border-top: 2px dashed #e0e0e0;
-            margin: 20px 0;
-        }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>📢 Вызов в обработку</h1>
-        <div class="subtitle">Выберите окно и нажмите "Позвать"</div>
+        <div class="subtitle">Выберите окно, напишите сообщение и нажмите "Позвать"</div>
         
         <div class="computer-grid">
             {% for i in range(1, 21) %}
@@ -202,6 +241,14 @@ CLIENT_PAGE = """
             <span style="font-size:10px; color:#999; display:block; margin-top:2px;">ТЕСТ</span>
         </button>
         
+        <hr class="divider">
+        
+        <div class="message-area">
+            <label for="messageInput">💬 Сообщение для специалиста:</label>
+            <textarea id="messageInput" placeholder="Например: Срочно подойдите, проблема с печатью..." maxlength="200"></textarea>
+            <div class="char-count"><span id="charCount">0</span>/200</div>
+        </div>
+        
         <div class="selected-display">
             Выбрано: <strong id="selectedDisplay">не выбрано</strong>
         </div>
@@ -216,6 +263,11 @@ CLIENT_PAGE = """
     <script>
         let selectedPC = null;
         let isTest = false;
+        
+        // Счетчик символов
+        document.getElementById('messageInput').addEventListener('input', function() {
+            document.getElementById('charCount').textContent = this.value.length;
+        });
         
         function selectPC(num) {
             document.querySelectorAll('.computer-btn').forEach(btn => btn.classList.remove('active'));
@@ -248,17 +300,18 @@ CLIENT_PAGE = """
             
             const callBtn = document.getElementById('callBtn');
             const statusDiv = document.getElementById('status');
+            const message = document.getElementById('messageInput').value.trim();
             
             callBtn.disabled = true;
             callBtn.textContent = '⏳ Отправка...';
             
             let url = '/api/call';
-            let body = {};
+            let body = { message: message };
             
             if (isTest) {
                 url = '/api/call_test';
             } else {
-                body = { pc: selectedPC };
+                body.pc = selectedPC;
             }
             
             fetch(url, {
@@ -271,6 +324,8 @@ CLIENT_PAGE = """
                 if (data.status === 'ok') {
                     statusDiv.className = 'success';
                     statusDiv.textContent = '✅ ' + data.message;
+                    document.getElementById('messageInput').value = '';
+                    document.getElementById('charCount').textContent = '0';
                 } else {
                     statusDiv.className = 'error';
                     statusDiv.textContent = '❌ ' + data.message;
@@ -347,9 +402,12 @@ ADMIN_PAGE = """
             margin-bottom: 15px;
         }
         .log .entry {
-            padding: 8px 0;
+            padding: 10px 0;
             border-bottom: 1px solid #eee;
             font-size: 14px;
+        }
+        .log .entry:last-child {
+            border-bottom: none;
         }
         .log .entry .time {
             color: #999;
@@ -369,6 +427,15 @@ ADMIN_PAGE = """
             padding: 1px 8px;
             border-radius: 20px;
             margin-left: 5px;
+        }
+        .log .entry .msg-text {
+            color: #555;
+            font-style: italic;
+            margin-left: 5px;
+            background: #f8f9fa;
+            padding: 2px 10px;
+            border-radius: 5px;
+            font-size: 13px;
         }
         .log .empty {
             color: #999;
@@ -435,6 +502,9 @@ ADMIN_PAGE = """
                     <span class="{% if entry.status == 'ok' %}status-ok{% else %}status-err{% endif %}">
                         {{ entry.message }}
                     </span>
+                    {% if entry.text %}
+                    <span class="msg-text">📝 "{{ entry.text }}"</span>
+                    {% endif %}
                 </div>
                 {% endfor %}
             {% else %}
@@ -454,6 +524,7 @@ ADMIN_PAGE = """
                 <li>Основные окна: <strong>{{ prefix }}01</strong> — <strong>{{ prefix }}20</strong></li>
                 <li>Тестовое окно: <strong>{{ test_pc }}</strong></li>
                 <li>Форма доступна по адресу: <code>http://{{ ip }}:8080/client</code></li>
+                <li>💬 Ведущий может написать сообщение специалисту</li>
             </ul>
         </div>
     </div>
@@ -465,7 +536,7 @@ ADMIN_PAGE = """
 
 @app.route('/client')
 def client_page():
-    """Страница для вызова специалистов (только выбор окна)"""
+    """Страница для вызова специалистов (выбор окна + текст)"""
     return render_template_string(CLIENT_PAGE, 
                                   prefix=COMPUTER_PREFIX, 
                                   test_pc=TEST_COMPUTER)
@@ -490,22 +561,31 @@ def make_call():
     """Вызов специалиста"""
     data = request.json
     pc_number = data.get('pc')
+    message_text = data.get('message', '')
     
     if not pc_number or pc_number < 1 or pc_number > COMPUTER_COUNT:
         return jsonify({'status': 'error', 'message': f'Неверный номер (1-{COMPUTER_COUNT})'})
     
     pc_name = f"{COMPUTER_PREFIX}{pc_number:02d}"
-    return send_msg(pc_name, test=False)
+    return send_msg(pc_name, message_text, test=False)
 
 @app.route('/api/call_test', methods=['POST'])
 def make_test_call():
     """Тестовый вызов"""
-    return send_msg(TEST_COMPUTER, test=True)
+    data = request.json
+    message_text = data.get('message', '')
+    return send_msg(TEST_COMPUTER, message_text, test=True)
 
-def send_msg(pc_name, test=False):
+def send_msg(pc_name, message_text, test=False):
     """Отправка сообщения"""
-    message = "ВНИМАНИЕ! Подойдите в обработку"
-    command = f'msg * /server:{pc_name} "{message}"'
+    # Формируем сообщение: если есть текст от ведущего, добавляем его
+    base_message = "ВНИМАНИЕ! Подойдите в обработку"
+    if message_text:
+        full_message = f"{base_message}\nСообщение: {message_text}"
+    else:
+        full_message = base_message
+    
+    command = f'msg * /server:{pc_name} "{full_message}"'
     
     try:
         result = subprocess.run(
@@ -534,6 +614,7 @@ def send_msg(pc_name, test=False):
         'time': datetime.now().strftime('%H:%M:%S'),
         'pc': pc_name,
         'test': test,
+        'text': message_text if message_text else None,
         'status': 'ok' if success else 'error',
         'message': msg
     })
@@ -550,7 +631,8 @@ if __name__ == '__main__':
     print("=" * 60)
     print(f"🧪 Тестовое окно: {TEST_COMPUTER}")
     print("=" * 60)
-    print("📌 На форме только выбор окна и кнопка ПОЗВАТЬ")
+    print("📌 Ведущий может написать сообщение специалисту")
+    print("   Сообщение отображается в окне msg на компьютере специалиста")
     print("=" * 60)
     
     threading.Timer(1.5, lambda: webbrowser.open("http://127.0.0.1:8080/admin")).start()
