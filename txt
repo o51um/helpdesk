@@ -11,7 +11,6 @@ app = Flask(__name__)
 LOCAL_IP = "172.17.6.52"
 COMPUTER_PREFIX = "WS00301"
 COMPUTER_COUNT = 20
-TEST_COMPUTER = "WS0030601"
 
 # ================ ХРАНИЛИЩЕ ================
 call_log = []
@@ -93,29 +92,6 @@ CLIENT_PAGE = """
             display: block;
             margin-top: 3px;
         }
-        .computer-btn.test-btn {
-            border-color: #ff6b6b;
-            background: #fff5f5;
-        }
-        .computer-btn.test-btn:hover {
-            border-color: #ee5a24;
-            background: #ffe8e8;
-        }
-        .computer-btn.test-btn.active {
-            border-color: #ee5a24;
-            background: #ee5a24;
-            color: white;
-            box-shadow: 0 4px 15px rgba(238, 90, 36, 0.4);
-        }
-        .test-badge {
-            display: inline-block;
-            background: #ff6b6b;
-            color: white;
-            font-size: 9px;
-            padding: 1px 10px;
-            border-radius: 20px;
-            margin-left: 5px;
-        }
         
         /* Поле для текста */
         .message-area {
@@ -152,12 +128,6 @@ CLIENT_PAGE = """
             margin-top: 3px;
         }
         
-        .divider {
-            border: none;
-            border-top: 2px dashed #e0e0e0;
-            margin: 20px 0;
-        }
-        
         .selected-display {
             padding: 12px;
             background: #f0f2ff;
@@ -169,9 +139,6 @@ CLIENT_PAGE = """
         .selected-display strong {
             color: #667eea;
             font-size: 20px;
-        }
-        .selected-display .test-name {
-            color: #ee5a24;
         }
         
         .call-btn {
@@ -230,19 +197,6 @@ CLIENT_PAGE = """
             {% endfor %}
         </div>
         
-        <hr class="divider">
-        
-        <div style="margin: 10px 0 15px 0; font-size: 14px; color: #888;">
-            🧪 Тестовое окно
-        </div>
-        <button class="computer-btn test-btn" onclick="selectTestPC()" id="pc_test" style="width: 100%;">
-            <span class="number">🧪</span>
-            <span class="pc-name">{{ test_pc }}</span>
-            <span style="font-size:10px; color:#999; display:block; margin-top:2px;">ТЕСТ</span>
-        </button>
-        
-        <hr class="divider">
-        
         <div class="message-area">
             <label for="messageInput">💬 Сообщение для специалиста:</label>
             <textarea id="messageInput" placeholder="Например: Срочно подойдите, проблема с печатью..." maxlength="200"></textarea>
@@ -262,7 +216,6 @@ CLIENT_PAGE = """
 
     <script>
         let selectedPC = null;
-        let isTest = false;
         
         // Счетчик символов
         document.getElementById('messageInput').addEventListener('input', function() {
@@ -272,25 +225,10 @@ CLIENT_PAGE = """
         function selectPC(num) {
             document.querySelectorAll('.computer-btn').forEach(btn => btn.classList.remove('active'));
             document.getElementById('pc_' + num).classList.add('active');
-            document.getElementById('pc_test').classList.remove('active');
             selectedPC = num;
-            isTest = false;
             
             const pcName = '{{ prefix }}' + String(num).padStart(2, '0');
             document.getElementById('selectedDisplay').textContent = pcName;
-            document.getElementById('selectedDisplay').className = '';
-            document.getElementById('callBtn').disabled = false;
-            document.getElementById('status').style.display = 'none';
-        }
-        
-        function selectTestPC() {
-            document.querySelectorAll('.computer-btn').forEach(btn => btn.classList.remove('active'));
-            document.getElementById('pc_test').classList.add('active');
-            selectedPC = 'test';
-            isTest = true;
-            
-            document.getElementById('selectedDisplay').textContent = '🧪 {{ test_pc }} (ТЕСТ)';
-            document.getElementById('selectedDisplay').className = 'test-name';
             document.getElementById('callBtn').disabled = false;
             document.getElementById('status').style.display = 'none';
         }
@@ -305,19 +243,13 @@ CLIENT_PAGE = """
             callBtn.disabled = true;
             callBtn.textContent = '⏳ Отправка...';
             
-            let url = '/api/call';
-            let body = { message: message };
-            
-            if (isTest) {
-                url = '/api/call_test';
-            } else {
-                body.pc = selectedPC;
-            }
-            
-            fetch(url, {
+            fetch('/api/call', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(body)
+                body: JSON.stringify({ 
+                    pc: selectedPC,
+                    message: message 
+                })
             })
             .then(response => response.json())
             .then(data => {
@@ -417,25 +349,19 @@ ADMIN_PAGE = """
             font-weight: 600;
             color: #667eea;
         }
-        .log .entry .pc.test { color: #ee5a24; }
         .log .entry .status-ok { color: #28a745; font-weight: 600; }
         .log .entry .status-err { color: #dc3545; font-weight: 600; }
-        .log .entry .test-label {
-            background: #ff6b6b;
-            color: white;
-            font-size: 9px;
-            padding: 1px 8px;
-            border-radius: 20px;
-            margin-left: 5px;
-        }
         .log .entry .msg-text {
+            display: block;
             color: #555;
             font-style: italic;
-            margin-left: 5px;
+            margin-top: 5px;
+            margin-left: 70px;
             background: #f8f9fa;
-            padding: 2px 10px;
-            border-radius: 5px;
+            padding: 5px 12px;
+            border-radius: 8px;
             font-size: 13px;
+            border-left: 3px solid #667eea;
         }
         .log .empty {
             color: #999;
@@ -494,16 +420,13 @@ ADMIN_PAGE = """
                 {% for entry in call_log[::-1] %}
                 <div class="entry">
                     <span class="time">{{ entry.time }}</span>
-                    <span class="pc {% if entry.test %}test{% endif %}">
-                        {{ entry.pc }}
-                        {% if entry.test %}<span class="test-label">TEST</span>{% endif %}
-                    </span>
+                    <span class="pc">{{ entry.pc }}</span>
                     — 
                     <span class="{% if entry.status == 'ok' %}status-ok{% else %}status-err{% endif %}">
                         {{ entry.message }}
                     </span>
                     {% if entry.text %}
-                    <span class="msg-text">📝 "{{ entry.text }}"</span>
+                    <span class="msg-text">💬 {{ entry.text }}</span>
                     {% endif %}
                 </div>
                 {% endfor %}
@@ -518,13 +441,13 @@ ADMIN_PAGE = """
             <a href="/client" class="test-link" target="_blank">🧪 Открыть форму (новая вкладка)</a>
         </div>
         
-        <div style="margin-top: 20px; padding: 15px; background: #fff3cd; border-radius: 10px; border-left: 4px solid #ffc107;">
+        <div style="margin-top: 20px; padding: 15px; background: #e8f5e9; border-radius: 10px; border-left: 4px solid #4CAF50;">
             <strong>📌 Информация:</strong>
-            <ul style="margin: 10px 0 0 20px; color: #856404;">
+            <ul style="margin: 10px 0 0 20px; color: #2e7d32;">
                 <li>Основные окна: <strong>{{ prefix }}01</strong> — <strong>{{ prefix }}20</strong></li>
-                <li>Тестовое окно: <strong>{{ test_pc }}</strong></li>
                 <li>Форма доступна по адресу: <code>http://{{ ip }}:8080/client</code></li>
-                <li>💬 Ведущий может написать сообщение специалисту</li>
+                <li>💬 Ведущий пишет сообщение → оно отправляется специалисту в <strong>msg</strong></li>
+                <li>📝 Формат: <code>ВНИМАНИЕ! Подойдите в обработку</code> + текст сообщения</li>
             </ul>
         </div>
     </div>
@@ -538,8 +461,7 @@ ADMIN_PAGE = """
 def client_page():
     """Страница для вызова специалистов (выбор окна + текст)"""
     return render_template_string(CLIENT_PAGE, 
-                                  prefix=COMPUTER_PREFIX, 
-                                  test_pc=TEST_COMPUTER)
+                                  prefix=COMPUTER_PREFIX)
 
 @app.route('/admin')
 def admin_page():
@@ -552,7 +474,6 @@ def admin_page():
     return render_template_string(ADMIN_PAGE,
                                   ip=LOCAL_IP,
                                   prefix=COMPUTER_PREFIX,
-                                  test_pc=TEST_COMPUTER,
                                   call_log=call_log,
                                   stats=stats)
 
@@ -561,29 +482,24 @@ def make_call():
     """Вызов специалиста"""
     data = request.json
     pc_number = data.get('pc')
-    message_text = data.get('message', '')
+    message_text = data.get('message', '').strip()
     
     if not pc_number or pc_number < 1 or pc_number > COMPUTER_COUNT:
         return jsonify({'status': 'error', 'message': f'Неверный номер (1-{COMPUTER_COUNT})'})
     
     pc_name = f"{COMPUTER_PREFIX}{pc_number:02d}"
-    return send_msg(pc_name, message_text, test=False)
+    return send_msg(pc_name, message_text)
 
-@app.route('/api/call_test', methods=['POST'])
-def make_test_call():
-    """Тестовый вызов"""
-    data = request.json
-    message_text = data.get('message', '')
-    return send_msg(TEST_COMPUTER, message_text, test=True)
-
-def send_msg(pc_name, message_text, test=False):
-    """Отправка сообщения"""
-    # Формируем сообщение: если есть текст от ведущего, добавляем его
-    base_message = "ВНИМАНИЕ! Подойдите в обработку"
+def send_msg(pc_name, message_text):
+    """Отправка сообщения через msg"""
+    # Формируем сообщение
     if message_text:
-        full_message = f"{base_message}\nСообщение: {message_text}"
+        full_message = f"ВНИМАНИЕ! Подойдите в обработку\n\nСообщение: {message_text}"
     else:
-        full_message = base_message
+        full_message = "ВНИМАНИЕ! Подойдите в обработку"
+    
+    # Экранируем кавычки для cmd
+    full_message = full_message.replace('"', '\\"')
     
     command = f'msg * /server:{pc_name} "{full_message}"'
     
@@ -598,22 +514,23 @@ def send_msg(pc_name, message_text, test=False):
         
         if result.returncode == 0:
             success = True
-            msg = "Сообщение отправлено"
+            msg = f"Сообщение отправлено на {pc_name}"
         else:
             success = False
-            msg = f"Ошибка: {result.stderr.strip() or 'Неизвестная ошибка'}"
+            error = result.stderr.strip() or 'Неизвестная ошибка'
+            msg = f"Ошибка: {error}"
             
     except subprocess.TimeoutExpired:
         success = False
-        msg = "Таймаут: компьютер не отвечает"
+        msg = f"Таймаут: {pc_name} не отвечает"
     except Exception as e:
         success = False
         msg = f"Ошибка: {str(e)}"
     
+    # Логируем вызов
     call_log.append({
         'time': datetime.now().strftime('%H:%M:%S'),
         'pc': pc_name,
-        'test': test,
         'text': message_text if message_text else None,
         'status': 'ok' if success else 'error',
         'message': msg
@@ -629,10 +546,13 @@ if __name__ == '__main__':
     print(f"📢 Форма вызова:     http://{LOCAL_IP}:8080/client")
     print(f"👨‍💼 Админ-панель:    http://127.0.0.1:8080/admin")
     print("=" * 60)
-    print(f"🧪 Тестовое окно: {TEST_COMPUTER}")
-    print("=" * 60)
-    print("📌 Ведущий может написать сообщение специалисту")
-    print("   Сообщение отображается в окне msg на компьютере специалиста")
+    print("📌 Ведущий пишет сообщение → оно отправляется специалисту")
+    print("   Формат сообщения в msg:")
+    print("   ┌─────────────────────────────────────┐")
+    print("   │ ВНИМАНИЕ! Подойдите в обработку     │")
+    print("   │                                     │")
+    print("   │ Сообщение: [текст от ведущего]      │")
+    print("   └─────────────────────────────────────┘")
     print("=" * 60)
     
     threading.Timer(1.5, lambda: webbrowser.open("http://127.0.0.1:8080/admin")).start()
