@@ -42,7 +42,6 @@ CLIENT_FORM = """
         .info-block strong { color: #495057; }
         .info-block .mfu-info { color: #28a745; font-weight: 600; }
         .info-block .pc-info { color: #17a2b8; font-weight: 600; }
-        select[multiple] { height: auto; min-height: 80px; }
     </style>
 </head>
 <body>
@@ -204,7 +203,7 @@ CLIENT_FORM = """
 </html>
 """
 
-# Панель мониторинга с SSE (обновлена для отображения информации об окне)
+# Панель мониторинга с SSE и управлением статусами
 ADMIN_PANEL = """
 <!DOCTYPE html>
 <html lang="ru">
@@ -213,16 +212,19 @@ ADMIN_PANEL = """
     <title>Панель IT-специалиста</title>
     <style>
         body { font-family: 'Segoe UI', sans-serif; background: #f1f3f5; padding: 20px; }
-        h1 { color: #212529; display: flex; align-items: center; gap: 10px; }
+        h1 { color: #212529; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
         .controls { margin-bottom: 20px; display: flex; gap: 10px; flex-wrap: wrap; }
-        button { padding: 10px 18px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 14px; transition: opacity 0.2s; }
-        button:hover { opacity: 0.85; }
+        button { padding: 10px 18px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 14px; transition: all 0.2s; }
+        button:hover { opacity: 0.85; transform: translateY(-1px); }
+        button:active { transform: scale(0.95); }
         .btn-clear { background: #dc3545; color: white; }
         .btn-refresh { background: #007bff; color: white; }
-        .btn-sound { background: #6c757d; color: white; }
-        .ticket { background: white; padding: 16px; margin-bottom: 12px; border-radius: 8px; box-shadow: 0 2px 6px rgba(0,0,0,0.08); border-left: 5px solid #007bff; transition: transform 0.1s; animation: slideIn 0.3s ease-out; }
-        .ticket:hover { transform: translateX(3px); }
+        .ticket { background: white; padding: 16px; margin-bottom: 12px; border-radius: 8px; box-shadow: 0 2px 6px rgba(0,0,0,0.08); border-left: 5px solid #007bff; transition: all 0.3s; animation: slideIn 0.3s ease-out; }
+        .ticket:hover { transform: translateX(3px); box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
         .ticket.urgent { border-left-color: #dc3545; background: #fff5f5; animation: pulse 2s infinite, slideIn 0.3s ease-out; }
+        .ticket.in-progress { border-left-color: #ffc107; background: #fffbf0; }
+        .ticket.resolved { border-left-color: #28a745; background: #f0fff4; opacity: 0.85; }
+        .ticket.resolved .desc { background: #e8f5e9; }
         @keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(220,53,69,0.4); } 50% { box-shadow: 0 0 0 8px rgba(220,53,69,0); } }
         @keyframes slideIn {
             from { opacity: 0; transform: translateY(-20px); }
@@ -231,8 +233,13 @@ ADMIN_PANEL = """
         .ticket-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 6px; flex-wrap: wrap; gap: 8px; }
         .ticket-header strong { font-size: 1.1em; }
         .badge { padding: 3px 10px; border-radius: 12px; font-size: 0.8em; font-weight: bold; white-space: nowrap; }
-        .badge-urgent { background: #dc3545; color: white; }
+        .badge-urgent { background: #dc3545; color: white; animation: blink 1.5s infinite; }
         .badge-normal { background: #e9ecef; color: #495057; }
+        .badge-status { padding: 3px 10px; border-radius: 12px; font-size: 0.75em; font-weight: bold; }
+        .badge-delivered { background: #007bff; color: white; }
+        .badge-progress { background: #ffc107; color: #212529; }
+        .badge-resolved { background: #28a745; color: white; }
+        @keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: 0.6; } }
         .meta { color: #868e96; font-size: 0.85em; margin-top: 5px; display: flex; gap: 15px; flex-wrap: wrap; }
         .meta-info { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 5px; }
         .meta-info span { background: #f8f9fa; padding: 2px 10px; border-radius: 4px; font-size: 0.85em; }
@@ -247,41 +254,109 @@ ADMIN_PANEL = """
             from { opacity: 0; transform: translateX(100px); }
             to { opacity: 1; transform: translateX(0); }
         }
+        .ticket-actions { margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap; }
+        .btn-status { padding: 5px 12px; border: none; border-radius: 4px; cursor: pointer; font-size: 0.8em; font-weight: 600; transition: all 0.2s; }
+        .btn-status:hover { transform: scale(1.05); }
+        .btn-status:active { transform: scale(0.95); }
+        .btn-delivered { background: #007bff; color: white; }
+        .btn-progress { background: #ffc107; color: #212529; }
+        .btn-resolved { background: #28a745; color: white; }
+        .btn-delete { background: #dc3545; color: white; }
+        .status-filters { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 15px; }
+        .filter-btn { padding: 6px 14px; border: 2px solid #dee2e6; border-radius: 20px; background: white; cursor: pointer; font-size: 0.85em; transition: all 0.2s; }
+        .filter-btn:hover { background: #f8f9fa; }
+        .filter-btn.active { border-color: #007bff; background: #007bff; color: white; }
+        .filter-btn.active-all { border-color: #6c757d; background: #6c757d; color: white; }
+        .stats { display: flex; gap: 20px; flex-wrap: wrap; margin-bottom: 15px; }
+        .stat-item { background: white; padding: 8px 16px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        .stat-item span { font-weight: 600; }
+        .stat-delivered { color: #007bff; }
+        .stat-progress { color: #ffc107; }
+        .stat-resolved { color: #28a745; }
     </style>
 </head>
 <body>
     <h1>🖥️ Поступившие заявки <span class="counter" id="counter">0</span></h1>
+    
+    <div class="stats">
+        <div class="stat-item">📋 Всего: <span id="totalCount">0</span></div>
+        <div class="stat-item stat-delivered">📩 Доставлено: <span id="deliveredCount">0</span></div>
+        <div class="stat-item stat-progress">🔧 В работе: <span id="progressCount">0</span></div>
+        <div class="stat-item stat-resolved">✅ Решено: <span id="resolvedCount">0</span></div>
+    </div>
+    
+    <div class="status-filters">
+        <button class="filter-btn active active-all" data-filter="all" onclick="setFilter('all')">📋 Все</button>
+        <button class="filter-btn" data-filter="delivered" onclick="setFilter('delivered')">📩 Доставлено</button>
+        <button class="filter-btn" data-filter="in-progress" onclick="setFilter('in-progress')">🔧 В работе</button>
+        <button class="filter-btn" data-filter="resolved" onclick="setFilter('resolved')">✅ Решено</button>
+    </div>
+    
     <div class="controls">
         <button class="btn-refresh" onclick="location.reload()">🔄 Обновить</button>
-        <button class="btn-clear" onclick="clearTickets()">🗑️ Очистить всё</button>
+        <button class="btn-clear" onclick="clearAllTickets()">🗑️ Очистить всё</button>
     </div>
+    
     <div id="tickets-container">
         <div class="empty">⏳ Загрузка заявок...</div>
     </div>
 
     <script>
         let tickets = [];
+        let currentFilter = 'all';
+        let ticketIdCounter = 0;
         
         // Функция для отображения заявок
         function renderTickets() {
             const container = document.getElementById('tickets-container');
             const counter = document.getElementById('counter');
             
-            counter.textContent = tickets.length;
+            // Подсчет статистики
+            const total = tickets.length;
+            const delivered = tickets.filter(t => t.status === 'delivered').length;
+            const inProgress = tickets.filter(t => t.status === 'in-progress').length;
+            const resolved = tickets.filter(t => t.status === 'resolved').length;
             
-            if (tickets.length === 0) {
-                container.innerHTML = '<div class="empty">✨ Заявок пока нет. Ждём...</div>';
+            document.getElementById('totalCount').textContent = total;
+            document.getElementById('deliveredCount').textContent = delivered;
+            document.getElementById('progressCount').textContent = inProgress;
+            document.getElementById('resolvedCount').textContent = resolved;
+            counter.textContent = total;
+            
+            // Фильтрация
+            let filteredTickets = tickets;
+            if (currentFilter === 'delivered') {
+                filteredTickets = tickets.filter(t => t.status === 'delivered');
+            } else if (currentFilter === 'in-progress') {
+                filteredTickets = tickets.filter(t => t.status === 'in-progress');
+            } else if (currentFilter === 'resolved') {
+                filteredTickets = tickets.filter(t => t.status === 'resolved');
+            }
+            
+            if (filteredTickets.length === 0) {
+                container.innerHTML = `<div class="empty">✨ ${currentFilter === 'all' ? 'Заявок пока нет. Ждём...' : 'Нет заявок с таким статусом'}</div>`;
                 return;
             }
             
             // Показываем в обратном порядке (сначала новые)
-            const reversed = [...tickets].reverse();
+            const reversed = [...filteredTickets].reverse();
             
-            container.innerHTML = reversed.map(ticket => `
-                <div class="ticket ${ticket.urgent ? 'urgent' : ''}">
+            container.innerHTML = reversed.map(ticket => {
+                const statusBadge = {
+                    'delivered': '<span class="badge-status badge-delivered">📩 Доставлено</span>',
+                    'in-progress': '<span class="badge-status badge-progress">🔧 В работе</span>',
+                    'resolved': '<span class="badge-status badge-resolved">✅ Решено</span>'
+                }[ticket.status] || '<span class="badge-status badge-delivered">📩 Доставлено</span>';
+                
+                return `
+                <div class="ticket ${ticket.urgent ? 'urgent' : ''} ${ticket.status === 'in-progress' ? 'in-progress' : ''} ${ticket.status === 'resolved' ? 'resolved' : ''}" id="ticket-${ticket.id}">
                     <div class="ticket-header">
-                        <strong>👤 ${ticket.full_name}</strong>
-                        ${ticket.urgent ? '<span class="badge badge-urgent">⚠️ СРОЧНО</span>' : '<span class="badge badge-normal">Обычная</span>'}
+                        <div>
+                            <strong>👤 ${ticket.full_name}</strong>
+                            ${ticket.urgent ? '<span class="badge badge-urgent">⚠️ СРОЧНО</span>' : '<span class="badge badge-normal">Обычная</span>'}
+                            ${statusBadge}
+                        </div>
+                        <div style="font-size: 0.85em; color: #6c757d;">#${ticket.id}</div>
                     </div>
                     <div class="meta">
                         <span>🏢 ${ticket.branch}</span>
@@ -293,8 +368,95 @@ ADMIN_PANEL = """
                     </div>
                     <div class="desc">${ticket.description}</div>
                     <div class="time">🕒 ${ticket.time}</div>
+                    <div class="ticket-actions">
+                        ${ticket.status !== 'in-progress' ? `<button class="btn-status btn-progress" onclick="updateStatus(${ticket.id}, 'in-progress')">🔧 В работу</button>` : ''}
+                        ${ticket.status !== 'resolved' ? `<button class="btn-status btn-resolved" onclick="updateStatus(${ticket.id}, 'resolved')">✅ Решено</button>` : ''}
+                        ${ticket.status !== 'delivered' ? `<button class="btn-status btn-delivered" onclick="updateStatus(${ticket.id}, 'delivered')">📩 Вернуть в доставлено</button>` : ''}
+                        <button class="btn-status btn-delete" onclick="deleteTicket(${ticket.id})">🗑️ Удалить</button>
+                    </div>
                 </div>
-            `).join('');
+            `}).join('');
+        }
+        
+        // Обновление статуса заявки
+        async function updateStatus(ticketId, newStatus) {
+            try {
+                const response = await fetch('/update_status', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id: ticketId, status: newStatus })
+                });
+                const result = await response.json();
+                if (result.status === 'ok') {
+                    // Обновляем локально
+                    const ticket = tickets.find(t => t.id === ticketId);
+                    if (ticket) {
+                        ticket.status = newStatus;
+                        renderTickets();
+                        showStatusNotification(ticket, newStatus);
+                    }
+                } else {
+                    alert('Ошибка обновления статуса');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                alert('Ошибка обновления статуса');
+            }
+        }
+        
+        // Удаление заявки
+        async function deleteTicket(ticketId) {
+            if (!confirm('Удалить эту заявку?')) return;
+            
+            try {
+                const response = await fetch('/delete_ticket', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id: ticketId })
+                });
+                const result = await response.json();
+                if (result.status === 'ok') {
+                    tickets = tickets.filter(t => t.id !== ticketId);
+                    renderTickets();
+                } else {
+                    alert('Ошибка удаления заявки');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                alert('Ошибка удаления заявки');
+            }
+        }
+        
+        // Уведомление о смене статуса
+        function showStatusNotification(ticket, status) {
+            const statusNames = {
+                'delivered': '📩 Доставлено',
+                'in-progress': '🔧 В работе',
+                'resolved': '✅ Решено'
+            };
+            
+            const toast = document.createElement('div');
+            toast.className = 'toast';
+            toast.textContent = `📌 Заявка #${ticket.id} (${ticket.full_name}) → ${statusNames[status]}`;
+            document.body.appendChild(toast);
+            
+            setTimeout(() => {
+                toast.style.opacity = '0';
+                toast.style.transition = 'opacity 0.5s';
+                setTimeout(() => toast.remove(), 500);
+            }, 3000);
+        }
+        
+        // Фильтрация заявок
+        function setFilter(filter) {
+            currentFilter = filter;
+            document.querySelectorAll('.filter-btn').forEach(btn => {
+                btn.classList.remove('active', 'active-all');
+                if (btn.dataset.filter === filter) {
+                    btn.classList.add('active');
+                }
+            });
+            renderTickets();
         }
         
         // Подключение к SSE
@@ -305,37 +467,40 @@ ADMIN_PANEL = """
                 const data = JSON.parse(event.data);
                 
                 if (data.type === 'init') {
-                    // Начальная загрузка всех заявок
                     tickets = data.tickets;
+                    if (tickets.length > 0) {
+                        ticketIdCounter = Math.max(...tickets.map(t => t.id)) + 1;
+                    }
                     renderTickets();
                 } else if (data.type === 'new_ticket') {
-                    // Новая заявка
                     tickets.push(data.ticket);
                     renderTickets();
-                    
-                    // Показываем уведомление
                     showNotification(data.ticket);
-                    
-                    // Звуковой сигнал (если поддерживается)
-                    playSound();
                 } else if (data.type === 'clear') {
-                    // Очистка
                     tickets = [];
+                    renderTickets();
+                } else if (data.type === 'status_updated') {
+                    const ticket = tickets.find(t => t.id === data.ticket.id);
+                    if (ticket) {
+                        ticket.status = data.ticket.status;
+                        renderTickets();
+                    }
+                } else if (data.type === 'ticket_deleted') {
+                    tickets = tickets.filter(t => t.id !== data.ticketId);
                     renderTickets();
                 }
             };
             
             eventSource.onerror = function() {
-                // Переподключение через 3 секунды
                 setTimeout(connectSSE, 3000);
             };
         }
         
-        // Уведомление
+        // Уведомление о новой заявке
         function showNotification(ticket) {
             const toast = document.createElement('div');
             toast.className = 'toast';
-            toast.textContent = `🔔 Новая заявка от ${ticket.full_name} (Окно ${ticket.window_number})${ticket.urgent ? ' ⚠️ СРОЧНО!' : ''}`;
+            toast.textContent = `🔔 Новая заявка #${ticket.id} от ${ticket.full_name} (Окно ${ticket.window_number})${ticket.urgent ? ' ⚠️ СРОЧНО!' : ''}`;
             document.body.appendChild(toast);
             
             setTimeout(() => {
@@ -345,29 +510,10 @@ ADMIN_PANEL = """
             }, 5000);
         }
         
-        // Звук
-        function playSound() {
-            try {
-                const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-                const oscillator = audioCtx.createOscillator();
-                const gainNode = audioCtx.createGain();
-                oscillator.connect(gainNode);
-                gainNode.connect(audioCtx.destination);
-                oscillator.frequency.value = 800;
-                oscillator.type = 'sine';
-                gainNode.gain.setValueAtTime(0.3, audioCtx.currentTime);
-                oscillator.start();
-                oscillator.stop(audioCtx.currentTime + 0.2);
-            } catch(e) {
-                // Если звук не поддерживается, игнорируем
-            }
-        }
-        
-        // Очистка заявок
-        async function clearTickets() {
+        // Очистка всех заявок
+        async function clearAllTickets() {
             if (confirm('Удалить ВСЕ заявки?')) {
                 await fetch('/clear', { method: 'POST' });
-                // SSE автоматически обновит список
             }
         }
         
@@ -387,13 +533,24 @@ def stream():
         
         # Ждем новые события
         last_id = len(tickets)
+        last_status = {t.get('id'): t.get('status') for t in tickets}
+        
         while True:
-            # Проверяем, есть ли новые заявки
+            # Проверяем новые заявки
             if len(tickets) > last_id:
                 new_ticket = tickets[-1]
                 yield f"data: {json.dumps({'type': 'new_ticket', 'ticket': new_ticket})}\n\n"
                 last_id = len(tickets)
-            time.sleep(0.5)  # Проверяем каждые 0.5 секунды
+            
+            # Проверяем изменения статусов
+            for ticket in tickets:
+                ticket_id = ticket.get('id')
+                current_status = ticket.get('status')
+                if ticket_id in last_status and last_status[ticket_id] != current_status:
+                    yield f"data: {json.dumps({'type': 'status_updated', 'ticket': ticket})}\n\n"
+                    last_status[ticket_id] = current_status
+            
+            time.sleep(0.5)
     
     return Response(event_stream(), mimetype="text/event-stream")
 
@@ -416,7 +573,10 @@ def submit_ticket():
         if not data or not data.get(field):
             return jsonify({"status": "error", "message": f"Поле '{field}' обязательно!"}), 400
     
-    # Добавляем время
+    # Добавляем ID и статус
+    ticket_id = len(tickets) + 1
+    data['id'] = ticket_id
+    data['status'] = 'delivered'  # Статус по умолчанию
     data['time'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
     # Добавляем данные по МФУ и ПК, если их нет
@@ -427,10 +587,47 @@ def submit_ticket():
     
     tickets.append(data)
     
-    print(f"🔥 НОВАЯ ЗАЯВКА | {data['full_name']} | Окно {data['window_number']} | {data['branch']}")
+    print(f"🔥 НОВАЯ ЗАЯВКА #{ticket_id} | {data['full_name']} | Окно {data['window_number']}")
     print(f"   МФУ: {data['mfu']} | ПК: {data['pc_name']}")
+    print(f"   Статус: {data['status']}")
     print(f"   Поломка: {data['description'][:60]}...")
     return jsonify({"status": "ok", "message": "Заявка принята!"}), 200
+
+@app.route('/update_status', methods=['POST'])
+def update_status():
+    data = request.get_json()
+    ticket_id = data.get('id')
+    new_status = data.get('status')
+    
+    if not ticket_id or not new_status:
+        return jsonify({"status": "error", "message": "Не указан ID или статус"}), 400
+    
+    # Ищем заявку по ID
+    for ticket in tickets:
+        if ticket.get('id') == ticket_id:
+            old_status = ticket.get('status')
+            ticket['status'] = new_status
+            print(f"📌 Заявка #{ticket_id}: статус изменен с '{old_status}' на '{new_status}'")
+            return jsonify({"status": "ok", "message": "Статус обновлен"}), 200
+    
+    return jsonify({"status": "error", "message": "Заявка не найдена"}), 404
+
+@app.route('/delete_ticket', methods=['POST'])
+def delete_ticket():
+    data = request.get_json()
+    ticket_id = data.get('id')
+    
+    if not ticket_id:
+        return jsonify({"status": "error", "message": "Не указан ID"}), 400
+    
+    # Ищем и удаляем заявку
+    for i, ticket in enumerate(tickets):
+        if ticket.get('id') == ticket_id:
+            deleted_ticket = tickets.pop(i)
+            print(f"🗑️ Удалена заявка #{ticket_id} от {deleted_ticket.get('full_name')}")
+            return jsonify({"status": "ok", "message": "Заявка удалена"}), 200
+    
+    return jsonify({"status": "error", "message": "Заявка не найдена"}), 404
 
 @app.route('/clear', methods=['POST'])
 def clear():
@@ -450,6 +647,7 @@ if __name__ == '__main__':
     print(f"🌐 Разошлите клиентам ссылку:   http://{local_ip}:8080/")
     print("=" * 60)
     print("✨ Заявки теперь отображаются МГНОВЕННО!")
+    print("📌 Статусы: Доставлено → В работе → Решено")
     print("=" * 60)
     
     threading.Timer(1.5, lambda: webbrowser.open("http://127.0.0.1:8080/admin")).start()
