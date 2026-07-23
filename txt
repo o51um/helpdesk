@@ -963,4 +963,102 @@ def submit_request():
 @app.route('/api/requests')
 def get_requests():
     """Получение всех заявок"""
-    return jsonify(
+    return jsonify(requests_data[::-1])  # Сначала новые
+
+@app.route('/api/update_status', methods=['POST'])
+def update_status():
+    """Обновление статуса заявки"""
+    data = request.json
+    req_id = data.get('id')
+    status = data.get('status')
+    
+    for req in requests_data:
+        if req['id'] == req_id:
+            req['status'] = status
+            return jsonify({'status': 'ok'})
+    return jsonify({'status': 'error', 'message': 'Заявка не найдена'})
+
+@app.route('/api/delete_request', methods=['POST'])
+def delete_request():
+    """Удаление заявки"""
+    data = request.json
+    req_id = data.get('id')
+    
+    global requests_data
+    requests_data = [req for req in requests_data if req['id'] != req_id]
+    return jsonify({'status': 'ok'})
+
+@app.route('/api/call', methods=['POST'])
+def make_call():
+    """Вызов специалиста"""
+    data = request.json
+    pc_number = data.get('pc')
+    
+    if not pc_number or pc_number < 1 or pc_number > COMPUTER_COUNT:
+        return jsonify({'status': 'error', 'message': f'Неверный номер (1-{COMPUTER_COUNT})'})
+    
+    pc_name = f"{COMPUTER_PREFIX}{pc_number:02d}"
+    return send_msg(pc_name, test=False)
+
+@app.route('/api/call_test', methods=['POST'])
+def make_test_call():
+    """Тестовый вызов"""
+    return send_msg(TEST_COMPUTER, test=True)
+
+def send_msg(pc_name, test=False):
+    """Отправка сообщения"""
+    message = "ВНИМАНИЕ! Подойдите в обработку"
+    command = f'msg * /server:{pc_name} "{message}"'
+    
+    try:
+        result = subprocess.run(
+            command,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        
+        if result.returncode == 0:
+            success = True
+            msg = "Сообщение отправлено"
+        else:
+            success = False
+            msg = f"Ошибка: {result.stderr.strip() or 'Неизвестная ошибка'}"
+            
+    except subprocess.TimeoutExpired:
+        success = False
+        msg = "Таймаут: компьютер не отвечает"
+    except Exception as e:
+        success = False
+        msg = f"Ошибка: {str(e)}"
+    
+    call_log.append({
+        'time': datetime.now().strftime('%H:%M:%S'),
+        'pc': pc_name,
+        'test': test,
+        'status': 'ok' if success else 'error',
+        'message': msg
+    })
+    
+    return jsonify({'status': 'ok' if success else 'error', 'message': msg})
+
+# ================ ЗАПУСК ================
+if __name__ == '__main__':
+    print("=" * 60)
+    print("🖥️  СЕРВЕР ЗАЯВОК И ВЫЗОВОВ ЗАПУЩЕН")
+    print("=" * 60)
+    print(f"📋 Админ-панель:    http://127.0.0.1:8080/admin")
+    print(f"📝 Форма заявок:    http://{LOCAL_IP}:8080/")
+    print(f"📊 Отслеживание:    http://{LOCAL_IP}:8080/track")
+    print("=" * 60)
+    print("✨ В админ-панели есть 3 вкладки:")
+    print("   📋 Заявки - управление заявками")
+    print("   🔔 Вызов специалистов - отправка сообщений (20 окон + тест)")
+    print("   🧪 ТЕСТ - быстрая проверка на WS0030601")
+    print("=" * 60)
+    print(f"🧪 Тестовый компьютер: {TEST_COMPUTER}")
+    print("=" * 60)
+    
+    threading.Timer(1.5, lambda: webbrowser.open("http://127.0.0.1:8080/admin")).start()
+    app.run(host='0.0.0.0', port=8080, debug=True, threaded=True)
