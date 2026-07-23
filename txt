@@ -1,40 +1,30 @@
-from flask import Flask, render_template_string, request, jsonify, redirect, url_for
+from flask import Flask, render_template_string, request, jsonify
 import subprocess
-import socket
 import threading
 import time
 import webbrowser
-import json
-import os
 from datetime import datetime
 
 app = Flask(__name__)
 
 # ================ КОНФИГУРАЦИЯ ================
-LOCAL_IP = "172.17.6.52"  # Ваш IP
-COMPUTER_PREFIX = "WS00301"  # Префикс имен компьютеров
-COMPUTER_COUNT = 20  # Количество компьютеров
-
-# Тестовый компьютер (отдельно от основной сетки)
+LOCAL_IP = "172.17.6.52"
+COMPUTER_PREFIX = "WS00301"
+COMPUTER_COUNT = 20
 TEST_COMPUTER = "WS0030601"
 
-# ================ ХРАНИЛИЩЕ ДАННЫХ ================
-# Для заявок (ваша существующая система)
-requests_data = []
-request_counter = 1
-
-# Для вызовов специалистов
+# ================ ХРАНИЛИЩЕ ================
 call_log = []
 
 # ================ HTML СТРАНИЦЫ ================
 
-# 1. СТРАНИЦА ФОРМЫ ЗАЯВКИ (ваша существующая)
-FORM_PAGE = """
+# 1. КЛИЕНТСКАЯ ФОРМА (ТОЛЬКО ВЫБОР ОКНА)
+CLIENT_PAGE = """
 <!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>📝 Подача заявки</title>
+    <title>📢 Вызов специалиста</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -50,396 +40,21 @@ FORM_PAGE = """
             background: white;
             border-radius: 25px;
             padding: 40px;
-            max-width: 500px;
+            max-width: 550px;
             width: 100%;
             box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-        }
-        h1 { text-align: center; color: #333; margin-bottom: 5px; }
-        .subtitle { text-align: center; color: #888; margin-bottom: 30px; font-size: 14px; }
-        .form-group { margin-bottom: 20px; }
-        label { display: block; font-weight: 600; margin-bottom: 8px; color: #555; }
-        input, select, textarea {
-            width: 100%;
-            padding: 12px;
-            border: 2px solid #e0e0e0;
-            border-radius: 10px;
-            font-size: 16px;
-            transition: border-color 0.3s;
-            font-family: inherit;
-        }
-        input:focus, select:focus, textarea:focus {
-            outline: none;
-            border-color: #667eea;
-        }
-        textarea { height: 100px; resize: vertical; }
-        button {
-            width: 100%;
-            padding: 15px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            border: none;
-            border-radius: 10px;
-            font-size: 18px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: transform 0.2s, box-shadow 0.2s;
-        }
-        button:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
-        }
-        #status {
-            margin-top: 15px;
-            padding: 12px;
-            border-radius: 10px;
             text-align: center;
-            font-weight: 600;
-            display: none;
         }
-        #status.success { display: block; background: #d4edda; color: #155724; }
-        #status.error { display: block; background: #f8d7da; color: #721c24; }
-        .track-link {
-            margin-top: 20px;
-            text-align: center;
+        h1 {
+            font-size: 28px;
+            color: #333;
+            margin-bottom: 5px;
+        }
+        .subtitle {
+            color: #888;
             font-size: 14px;
-            color: #888;
+            margin-bottom: 25px;
         }
-        .track-link a { color: #667eea; text-decoration: none; }
-        .track-link a:hover { text-decoration: underline; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>📝 Подача заявки</h1>
-        <div class="subtitle">Заполните форму и получите номер заявки</div>
-        
-        <form id="requestForm" onsubmit="submitRequest(event)">
-            <div class="form-group">
-                <label>Ваше окно:</label>
-                <input type="text" name="window" placeholder="Например: 101" required>
-            </div>
-            <div class="form-group">
-                <label>Описание проблемы:</label>
-                <textarea name="description" placeholder="Опишите проблему..." required></textarea>
-            </div>
-            <button type="submit">📨 Отправить заявку</button>
-        </form>
-        
-        <div id="status"></div>
-        
-        <div class="track-link">
-            <a href="#" onclick="window.open('http://{{ ip }}:8080/track', '_blank')">
-                📊 Отследить статус заявки
-            </a>
-        </div>
-    </div>
-
-    <script>
-        function submitRequest(event) {
-            event.preventDefault();
-            const form = document.getElementById('requestForm');
-            const formData = new FormData(form);
-            const statusDiv = document.getElementById('status');
-            
-            fetch('/submit', {
-                method: 'POST',
-                body: formData
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.status === 'ok') {
-                    statusDiv.className = 'success';
-                    statusDiv.textContent = '✅ Заявка #' + data.number + ' создана!';
-                    form.reset();
-                } else {
-                    statusDiv.className = 'error';
-                    statusDiv.textContent = '❌ Ошибка: ' + data.message;
-                }
-                statusDiv.style.display = 'block';
-                setTimeout(() => { statusDiv.style.display = 'none'; }, 5000);
-            })
-            .catch(() => {
-                statusDiv.className = 'error';
-                statusDiv.textContent = '❌ Ошибка соединения';
-                statusDiv.style.display = 'block';
-            });
-        }
-    </script>
-</body>
-</html>
-"""
-
-# 2. СТРАНИЦА ОТСЛЕЖИВАНИЯ (ваша существующая)
-TRACK_PAGE = """
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <title>📊 Отслеживание заявок</title>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: #f0f2f5;
-            padding: 20px;
-        }
-        .container {
-            max-width: 800px;
-            margin: 0 auto;
-        }
-        h1 { color: #333; margin-bottom: 20px; text-align: center; }
-        .filter {
-            background: white;
-            padding: 20px;
-            border-radius: 15px;
-            margin-bottom: 20px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-        }
-        .filter input {
-            padding: 10px 15px;
-            border: 2px solid #e0e0e0;
-            border-radius: 10px;
-            font-size: 16px;
-            width: 70%;
-            margin-right: 10px;
-        }
-        .filter button {
-            padding: 10px 25px;
-            background: #667eea;
-            color: white;
-            border: none;
-            border-radius: 10px;
-            font-size: 16px;
-            cursor: pointer;
-        }
-        .filter button:hover { background: #5a6fd6; }
-        .request-card {
-            background: white;
-            padding: 20px;
-            border-radius: 15px;
-            margin-bottom: 15px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            border-left: 4px solid #667eea;
-        }
-        .request-card .header {
-            display: flex;
-            justify-content: space-between;
-            margin-bottom: 10px;
-            font-size: 14px;
-            color: #888;
-        }
-        .request-card .number { font-weight: 700; color: #333; font-size: 18px; }
-        .request-card .window { font-weight: 600; color: #667eea; }
-        .request-card .description { margin: 10px 0; color: #555; }
-        .request-card .status {
-            display: inline-block;
-            padding: 5px 15px;
-            border-radius: 20px;
-            font-size: 13px;
-            font-weight: 600;
-        }
-        .status-new { background: #ffd93d; color: #8a6d00; }
-        .status-work { background: #6bcbff; color: #004a7c; }
-        .status-done { background: #6fcf97; color: #006633; }
-        .not-found {
-            text-align: center;
-            color: #888;
-            padding: 40px;
-            font-size: 18px;
-        }
-        .refresh-btn {
-            text-align: center;
-            margin-top: 20px;
-        }
-        .refresh-btn button {
-            padding: 10px 30px;
-            background: #667eea;
-            color: white;
-            border: none;
-            border-radius: 10px;
-            cursor: pointer;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>📊 Отслеживание заявок</h1>
-        
-        <div class="filter">
-            <input type="text" id="searchInput" placeholder="Введите номер заявки или окно..." onkeyup="filterRequests()">
-            <button onclick="filterRequests()">🔍 Найти</button>
-            <button onclick="showAll()" style="background: #6c757d; margin-left: 5px;">Показать все</button>
-        </div>
-        
-        <div id="requestsList"></div>
-        
-        <div class="refresh-btn">
-            <button onclick="loadRequests()">🔄 Обновить</button>
-        </div>
-    </div>
-
-    <script>
-        function loadRequests() {
-            fetch('/api/requests')
-            .then(response => response.json())
-            .then(data => {
-                renderRequests(data);
-            })
-            .catch(() => {
-                document.getElementById('requestsList').innerHTML = 
-                    '<div class="not-found">❌ Ошибка загрузки данных</div>';
-            });
-        }
-        
-        function renderRequests(requests) {
-            const container = document.getElementById('requestsList');
-            if (!requests || requests.length === 0) {
-                container.innerHTML = '<div class="not-found">📭 Нет заявок</div>';
-                return;
-            }
-            
-            let html = '';
-            requests.forEach(req => {
-                const statusClass = req.status === 'Новая' ? 'status-new' : 
-                                   req.status === 'В работе' ? 'status-work' : 'status-done';
-                html += `
-                    <div class="request-card">
-                        <div class="header">
-                            <span class="number">#${req.id}</span>
-                            <span class="window">🪟 Окно ${req.window}</span>
-                            <span>${req.time}</span>
-                        </div>
-                        <div class="description">${req.description}</div>
-                        <div>
-                            <span class="status ${statusClass}">${req.status}</span>
-                        </div>
-                    </div>
-                `;
-            });
-            container.innerHTML = html;
-        }
-        
-        function filterRequests() {
-            const query = document.getElementById('searchInput').value.toLowerCase();
-            fetch('/api/requests')
-            .then(response => response.json())
-            .then(data => {
-                const filtered = data.filter(req => 
-                    String(req.id).includes(query) || 
-                    req.window.toLowerCase().includes(query)
-                );
-                renderRequests(filtered);
-            });
-        }
-        
-        function showAll() {
-            document.getElementById('searchInput').value = '';
-            loadRequests();
-        }
-        
-        // Автообновление каждые 10 секунд
-        setInterval(loadRequests, 10000);
-        loadRequests();
-    </script>
-</body>
-</html>
-"""
-
-# 3. АДМИН-ПАНЕЛЬ (ваша существующая + вызов специалистов + тест)
-ADMIN_PAGE = """
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <title>👨‍💼 Админ-панель</title>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: #f0f2f5;
-            padding: 20px;
-        }
-        .container { max-width: 1200px; margin: 0 auto; }
-        h1 { color: #333; margin-bottom: 10px; }
-        .tabs {
-            display: flex;
-            gap: 10px;
-            margin-bottom: 20px;
-            background: white;
-            padding: 10px;
-            border-radius: 15px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            flex-wrap: wrap;
-        }
-        .tab-btn {
-            padding: 10px 25px;
-            border: none;
-            border-radius: 10px;
-            cursor: pointer;
-            font-size: 16px;
-            font-weight: 600;
-            transition: all 0.3s;
-        }
-        .tab-btn.active {
-            background: #667eea;
-            color: white;
-        }
-        .tab-btn:not(.active) {
-            background: #e9ecef;
-            color: #555;
-        }
-        .tab-btn:not(.active):hover {
-            background: #dee2e6;
-        }
-        .tab-btn.test {
-            background: #ff6b6b;
-            color: white;
-        }
-        .tab-btn.test:hover {
-            background: #ee5a24;
-        }
-        .tab-content {
-            display: none;
-            background: white;
-            padding: 25px;
-            border-radius: 15px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-        }
-        .tab-content.active { display: block; }
-        
-        /* Таблица заявок */
-        .table-wrap { overflow-x: auto; }
-        table {
-            width: 100%;
-            border-collapse: collapse;
-        }
-        th, td {
-            padding: 12px;
-            text-align: left;
-            border-bottom: 1px solid #eee;
-        }
-        th {
-            background: #f8f9fa;
-            font-weight: 600;
-            color: #555;
-        }
-        .status-select {
-            padding: 5px 10px;
-            border-radius: 5px;
-            border: 1px solid #ddd;
-            font-weight: 600;
-        }
-        .btn-delete {
-            padding: 5px 10px;
-            background: #dc3545;
-            color: white;
-            border: none;
-            border-radius: 5px;
-            cursor: pointer;
-        }
-        .btn-delete:hover { background: #c82333; }
-        
-        /* Сетка компьютеров */
         .computer-grid {
             display: grid;
             grid-template-columns: repeat(4, 1fr);
@@ -460,6 +75,7 @@ ADMIN_PAGE = """
         .computer-btn:hover {
             border-color: #667eea;
             background: #f0f2ff;
+            transform: translateY(-2px);
         }
         .computer-btn.active {
             border-color: #667eea;
@@ -467,21 +83,19 @@ ADMIN_PAGE = """
             color: white;
             box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
         }
-        .computer-btn .number { font-size: 20px; display: block; }
-        .computer-btn .pc-name { font-size: 10px; opacity: 0.7; display: block; margin-top: 3px; }
-        
-        /* Кнопка для тестового компьютера */
-        .test-grid {
-            display: flex;
-            justify-content: center;
-            margin: 20px 0;
+        .computer-btn .number {
+            font-size: 20px;
+            display: block;
+        }
+        .computer-btn .pc-name {
+            font-size: 10px;
+            opacity: 0.7;
+            display: block;
+            margin-top: 3px;
         }
         .computer-btn.test-btn {
-            padding: 20px 40px;
             border-color: #ff6b6b;
             background: #fff5f5;
-            font-size: 18px;
-            min-width: 200px;
         }
         .computer-btn.test-btn:hover {
             border-color: #ee5a24;
@@ -493,20 +107,15 @@ ADMIN_PAGE = """
             color: white;
             box-shadow: 0 4px 15px rgba(238, 90, 36, 0.4);
         }
-        .computer-btn.test-btn .pc-name {
-            font-size: 12px;
-            opacity: 0.8;
-        }
         .test-badge {
             display: inline-block;
             background: #ff6b6b;
             color: white;
-            font-size: 10px;
-            padding: 2px 10px;
+            font-size: 9px;
+            padding: 1px 10px;
             border-radius: 20px;
-            margin-left: 10px;
+            margin-left: 5px;
         }
-        
         .call-btn {
             width: 100%;
             padding: 18px;
@@ -518,7 +127,7 @@ ADMIN_PAGE = """
             font-weight: 700;
             cursor: pointer;
             transition: all 0.3s;
-            margin: 10px 0;
+            margin-top: 15px;
         }
         .call-btn:hover:not(:disabled) {
             transform: translateY(-3px);
@@ -527,316 +136,118 @@ ADMIN_PAGE = """
         .call-btn:disabled {
             opacity: 0.5;
             cursor: not-allowed;
-        }
-        .call-btn.test-call {
-            background: linear-gradient(135deg, #ff6b6b 0%, #c0392b 100%);
+            transform: none;
         }
         .selected-display {
             padding: 12px;
             background: #f0f2ff;
             border-radius: 10px;
-            text-align: center;
             margin: 15px 0;
+            font-size: 16px;
+            color: #555;
         }
-        .selected-display strong { color: #667eea; font-size: 20px; }
-        .selected-display .test-name { color: #ee5a24; }
-        .log {
-            margin-top: 20px;
-            padding: 15px;
-            background: #f8f9fa;
-            border-radius: 12px;
-            max-height: 200px;
-            overflow-y: auto;
-            font-size: 13px;
-            border: 1px solid #e0e0e0;
+        .selected-display strong {
+            color: #667eea;
+            font-size: 20px;
         }
-        .log .entry {
-            padding: 3px 0;
-            border-bottom: 1px solid #eee;
+        .selected-display .test-name {
+            color: #ee5a24;
         }
-        .log .entry .time { color: #999; margin-right: 10px; }
-        .log .entry .pc { font-weight: 600; color: #667eea; }
-        .log .entry .pc.test { color: #ee5a24; }
-        .log .entry .status-ok { color: #28a745; font-weight: 600; }
-        .log .entry .status-err { color: #dc3545; font-weight: 600; }
-        .log .entry .test-label {
-            background: #ff6b6b;
-            color: white;
-            font-size: 9px;
-            padding: 1px 8px;
-            border-radius: 20px;
-            margin-left: 5px;
-        }
-        
-        #callStatus {
-            margin: 15px 0;
+        #status {
+            margin-top: 15px;
             padding: 12px;
             border-radius: 10px;
             font-weight: 600;
             display: none;
         }
-        #callStatus.success { display: block; background: #d4edda; color: #155724; }
-        #callStatus.error { display: block; background: #f8d7da; color: #721c24; }
-        
-        .section-title {
-            font-size: 18px;
-            font-weight: 600;
-            color: #333;
-            margin: 25px 0 10px 0;
+        #status.success {
+            display: block;
+            background: #d4edda;
+            color: #155724;
         }
-        .section-divider {
+        #status.error {
+            display: block;
+            background: #f8d7da;
+            color: #721c24;
+        }
+        .divider {
             border: none;
             border-top: 2px dashed #e0e0e0;
-            margin: 25px 0;
+            margin: 20px 0;
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>👨‍💼 Админ-панель</h1>
+        <h1>📢 Вызов в обработку</h1>
+        <div class="subtitle">Выберите окно и нажмите "Позвать"</div>
         
-        <div class="tabs">
-            <button class="tab-btn active" onclick="switchTab('requests')">📋 Заявки</button>
-            <button class="tab-btn" onclick="switchTab('call')">🔔 Вызов специалистов</button>
-            <button class="tab-btn test" onclick="switchTab('test')">🧪 ТЕСТ</button>
-        </div>
-        
-        <!-- Вкладка: Заявки -->
-        <div id="tab-requests" class="tab-content active">
-            <h2>📋 Все заявки</h2>
-            <div class="table-wrap">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>#</th>
-                            <th>Окно</th>
-                            <th>Описание</th>
-                            <th>Время</th>
-                            <th>Статус</th>
-                            <th>Действие</th>
-                        </tr>
-                    </thead>
-                    <tbody id="requestsTableBody"></tbody>
-                </table>
-            </div>
-            <div id="noRequests" style="text-align:center; color:#999; padding:20px; display:none;">
-                Нет заявок
-            </div>
-        </div>
-        
-        <!-- Вкладка: Вызов специалистов -->
-        <div id="tab-call" class="tab-content">
-            <h2>🔔 Вызов специалиста в обработку</h2>
-            <p style="color:#888; margin-bottom:15px;">Выберите специалиста и нажмите "Позвать"</p>
-            
-            <div class="computer-grid">
-                {% for i in range(1, 21) %}
-                <button class="computer-btn" onclick="selectPC({{ i }})" id="pc_{{ i }}">
-                    <span class="number">{{ "%02d"|format(i) }}</span>
-                    <span class="pc-name">{{ prefix }}{{ "%02d"|format(i) }}</span>
-                </button>
-                {% endfor %}
-            </div>
-            
-            <hr class="section-divider">
-            
-            <div class="section-title">
-                🧪 Тестовый компьютер
-                <span class="test-badge">TEST</span>
-            </div>
-            <div class="test-grid">
-                <button class="computer-btn test-btn" onclick="selectTestPC()" id="pc_test">
-                    <span class="number">🧪</span>
-                    <span class="pc-name">{{ test_pc }}</span>
-                    <span style="font-size:10px; color:#999; display:block; margin-top:2px;">ТЕСТОВЫЙ</span>
-                </button>
-            </div>
-            
-            <div class="selected-display">
-                Выбран: <strong id="selectedDisplay">не выбран</strong>
-            </div>
-            
-            <button class="call-btn" id="callBtn" onclick="makeCall()" disabled>
-                🔔 ПОЗВАТЬ В ОБРАБОТКУ
+        <div class="computer-grid">
+            {% for i in range(1, 21) %}
+            <button class="computer-btn" onclick="selectPC({{ i }})" id="pc_{{ i }}">
+                <span class="number">{{ "%02d"|format(i) }}</span>
+                <span class="pc-name">{{ prefix }}{{ "%02d"|format(i) }}</span>
             </button>
-            
-            <div id="callStatus"></div>
-            
-            <div class="log">
-                <strong>📋 История вызовов:</strong>
-                <div id="callLogEntries">
-                    {% for entry in call_log[-10:] %}
-                    <div class="entry">
-                        <span class="time">{{ entry.time }}</span>
-                        <span class="pc {% if entry.test %}test{% endif %}">
-                            {{ entry.pc }}
-                            {% if entry.test %}<span class="test-label">TEST</span>{% endif %}
-                        </span>
-                        — 
-                        <span class="{% if entry.status == 'ok' %}status-ok{% else %}status-err{% endif %}">
-                            {{ entry.message }}
-                        </span>
-                    </div>
-                    {% endfor %}
-                    {% if not call_log %}
-                    <div style="color:#999; font-size:13px;">Вызовов пока нет</div>
-                    {% endif %}
-                </div>
-            </div>
+            {% endfor %}
         </div>
         
-        <!-- Вкладка: ТЕСТ -->
-        <div id="tab-test" class="tab-content">
-            <h2>🧪 Тестовый режим</h2>
-            <p style="color:#888; margin-bottom:20px;">
-                Здесь вы можете протестировать вызов на тестовом компьютере <strong>{{ test_pc }}</strong>
-            </p>
-            
-            <div style="display: flex; gap: 20px; flex-wrap: wrap; justify-content: center; margin: 30px 0;">
-                <button onclick="testCall()" style="
-                    padding: 20px 50px;
-                    background: linear-gradient(135deg, #ff6b6b 0%, #c0392b 100%);
-                    color: white;
-                    border: none;
-                    border-radius: 15px;
-                    font-size: 24px;
-                    font-weight: 700;
-                    cursor: pointer;
-                    box-shadow: 0 4px 15px rgba(238, 90, 36, 0.3);
-                    transition: all 0.3s;
-                " onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'">
-                    🧪 ТЕСТОВЫЙ ВЫЗОВ
-                </button>
-            </div>
-            
-            <div id="testStatus" style="
-                padding: 15px;
-                border-radius: 10px;
-                text-align: center;
-                font-weight: 600;
-                display: none;
-            "></div>
-            
-            <div style="background: #fff3cd; padding: 20px; border-radius: 10px; margin-top: 20px; border-left: 4px solid #ffc107;">
-                <strong>📌 Информация:</strong>
-                <ul style="margin: 10px 0 0 20px; color: #856404;">
-                    <li>Тестовый компьютер: <strong>{{ test_pc }}</strong></li>
-                    <li>Отправляет команду: <code>msg * /server:{{ test_pc }} "ВНИМАНИЕ! Подойдите в обработку"</code></li>
-                    <li>Используется для проверки работы системы</li>
-                </ul>
-            </div>
+        <hr class="divider">
+        
+        <div style="margin: 10px 0 15px 0; font-size: 14px; color: #888;">
+            🧪 Тестовое окно
         </div>
+        <button class="computer-btn test-btn" onclick="selectTestPC()" id="pc_test" style="width: 100%;">
+            <span class="number">🧪</span>
+            <span class="pc-name">{{ test_pc }}</span>
+            <span style="font-size:10px; color:#999; display:block; margin-top:2px;">ТЕСТ</span>
+        </button>
+        
+        <div class="selected-display">
+            Выбрано: <strong id="selectedDisplay">не выбрано</strong>
+        </div>
+        
+        <button class="call-btn" id="callBtn" onclick="makeCall()" disabled>
+            🔔 ПОЗВАТЬ
+        </button>
+        
+        <div id="status"></div>
     </div>
 
     <script>
-        // ======== Переключение вкладок ========
-        function switchTab(tab) {
-            document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
-            document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
-            document.getElementById('tab-' + tab).classList.add('active');
-            event.target.classList.add('active');
-            
-            if (tab === 'requests') loadRequests();
-        }
-        
-        // ======== Заявки ========
-        function loadRequests() {
-            fetch('/api/requests')
-            .then(response => response.json())
-            .then(data => {
-                const tbody = document.getElementById('requestsTableBody');
-                const noMsg = document.getElementById('noRequests');
-                
-                if (!data || data.length === 0) {
-                    tbody.innerHTML = '';
-                    noMsg.style.display = 'block';
-                    return;
-                }
-                noMsg.style.display = 'none';
-                
-                let html = '';
-                data.forEach(req => {
-                    html += `
-                        <tr>
-                            <td><strong>#${req.id}</strong></td>
-                            <td>${req.window}</td>
-                            <td>${req.description}</td>
-                            <td>${req.time}</td>
-                            <td>
-                                <select class="status-select" onchange="updateStatus(${req.id}, this.value)">
-                                    <option value="Новая" ${req.status === 'Новая' ? 'selected' : ''}>Новая</option>
-                                    <option value="В работе" ${req.status === 'В работе' ? 'selected' : ''}>В работе</option>
-                                    <option value="Решено" ${req.status === 'Решено' ? 'selected' : ''}>Решено</option>
-                                </select>
-                            </td>
-                            <td>
-                                <button class="btn-delete" onclick="deleteRequest(${req.id})">🗑️</button>
-                            </td>
-                        </tr>
-                    `;
-                });
-                tbody.innerHTML = html;
-            })
-            .catch(() => {});
-        }
-        
-        function updateStatus(id, status) {
-            fetch('/api/update_status', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ id: id, status: status })
-            })
-            .then(() => loadRequests());
-        }
-        
-        function deleteRequest(id) {
-            if (confirm('Удалить заявку #' + id + '?')) {
-                fetch('/api/delete_request', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ id: id })
-                })
-                .then(() => loadRequests());
-            }
-        }
-        
-        // ======== Вызов специалистов ========
         let selectedPC = null;
-        let isTestPC = false;
+        let isTest = false;
         
         function selectPC(num) {
             document.querySelectorAll('.computer-btn').forEach(btn => btn.classList.remove('active'));
             document.getElementById('pc_' + num).classList.add('active');
             document.getElementById('pc_test').classList.remove('active');
             selectedPC = num;
-            isTestPC = false;
+            isTest = false;
             
             const pcName = '{{ prefix }}' + String(num).padStart(2, '0');
             document.getElementById('selectedDisplay').textContent = pcName;
             document.getElementById('selectedDisplay').className = '';
             document.getElementById('callBtn').disabled = false;
-            document.getElementById('callBtn').className = 'call-btn';
-            document.getElementById('callStatus').style.display = 'none';
+            document.getElementById('status').style.display = 'none';
         }
         
         function selectTestPC() {
             document.querySelectorAll('.computer-btn').forEach(btn => btn.classList.remove('active'));
             document.getElementById('pc_test').classList.add('active');
             selectedPC = 'test';
-            isTestPC = true;
+            isTest = true;
             
             document.getElementById('selectedDisplay').textContent = '🧪 {{ test_pc }} (ТЕСТ)';
             document.getElementById('selectedDisplay').className = 'test-name';
             document.getElementById('callBtn').disabled = false;
-            document.getElementById('callBtn').className = 'call-btn test-call';
-            document.getElementById('callStatus').style.display = 'none';
+            document.getElementById('status').style.display = 'none';
         }
         
         function makeCall() {
             if (!selectedPC) return;
             
             const callBtn = document.getElementById('callBtn');
-            const statusDiv = document.getElementById('callStatus');
+            const statusDiv = document.getElementById('status');
             
             callBtn.disabled = true;
             callBtn.textContent = '⏳ Отправка...';
@@ -844,7 +255,7 @@ ADMIN_PAGE = """
             let url = '/api/call';
             let body = {};
             
-            if (isTestPC) {
+            if (isTest) {
                 url = '/api/call_test';
             } else {
                 body = { pc: selectedPC };
@@ -867,126 +278,212 @@ ADMIN_PAGE = """
                 statusDiv.style.display = 'block';
                 
                 callBtn.disabled = false;
-                callBtn.textContent = '🔔 ПОЗВАТЬ В ОБРАБОТКУ';
+                callBtn.textContent = '🔔 ПОЗВАТЬ';
                 
-                setTimeout(() => location.reload(), 2000);
+                setTimeout(() => {
+                    statusDiv.style.display = 'none';
+                }, 5000);
             })
             .catch(() => {
                 statusDiv.className = 'error';
                 statusDiv.textContent = '❌ Ошибка соединения';
                 statusDiv.style.display = 'block';
                 callBtn.disabled = false;
-                callBtn.textContent = '🔔 ПОЗВАТЬ В ОБРАБОТКУ';
+                callBtn.textContent = '🔔 ПОЗВАТЬ';
             });
         }
-        
-        // ======== Тестовый вызов ========
-        function testCall() {
-            const statusDiv = document.getElementById('testStatus');
-            statusDiv.style.display = 'block';
-            statusDiv.style.background = '#fff3cd';
-            statusDiv.style.color = '#856404';
-            statusDiv.textContent = '⏳ Отправка тестового вызова...';
-            
-            fetch('/api/call_test', {
-                method: 'POST'
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.status === 'ok') {
-                    statusDiv.style.background = '#d4edda';
-                    statusDiv.style.color = '#155724';
-                    statusDiv.textContent = '✅ ' + data.message;
-                } else {
-                    statusDiv.style.background = '#f8d7da';
-                    statusDiv.style.color = '#721c24';
-                    statusDiv.textContent = '❌ ' + data.message;
-                }
-            })
-            .catch(() => {
-                statusDiv.style.background = '#f8d7da';
-                statusDiv.style.color = '#721c24';
-                statusDiv.textContent = '❌ Ошибка соединения';
-            });
-        }
-        
-        // Автообновление заявок
-        setInterval(loadRequests, 5000);
-        loadRequests();
     </script>
+</body>
+</html>
+"""
+
+# 2. АДМИН-ПАНЕЛЬ (для вас)
+ADMIN_PAGE = """
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>👨‍💼 Админ-панель</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #f0f2f5;
+            padding: 20px;
+        }
+        .container { max-width: 1000px; margin: 0 auto; }
+        h1 { color: #333; margin-bottom: 20px; }
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        .stat-card {
+            background: white;
+            padding: 20px;
+            border-radius: 15px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            text-align: center;
+        }
+        .stat-card .number {
+            font-size: 32px;
+            font-weight: 700;
+            color: #667eea;
+        }
+        .stat-card .label {
+            color: #888;
+            font-size: 14px;
+        }
+        .log {
+            background: white;
+            padding: 20px;
+            border-radius: 15px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .log h2 {
+            font-size: 18px;
+            color: #333;
+            margin-bottom: 15px;
+        }
+        .log .entry {
+            padding: 8px 0;
+            border-bottom: 1px solid #eee;
+            font-size: 14px;
+        }
+        .log .entry .time {
+            color: #999;
+            margin-right: 15px;
+        }
+        .log .entry .pc {
+            font-weight: 600;
+            color: #667eea;
+        }
+        .log .entry .pc.test { color: #ee5a24; }
+        .log .entry .status-ok { color: #28a745; font-weight: 600; }
+        .log .entry .status-err { color: #dc3545; font-weight: 600; }
+        .log .entry .test-label {
+            background: #ff6b6b;
+            color: white;
+            font-size: 9px;
+            padding: 1px 8px;
+            border-radius: 20px;
+            margin-left: 5px;
+        }
+        .log .empty {
+            color: #999;
+            text-align: center;
+            padding: 20px;
+        }
+        .links {
+            display: flex;
+            gap: 15px;
+            margin-top: 20px;
+            flex-wrap: wrap;
+        }
+        .links a {
+            display: inline-block;
+            padding: 10px 25px;
+            background: #667eea;
+            color: white;
+            text-decoration: none;
+            border-radius: 10px;
+            font-weight: 600;
+            transition: background 0.3s;
+        }
+        .links a:hover {
+            background: #5a6fd6;
+        }
+        .links a.test-link {
+            background: #ff6b6b;
+        }
+        .links a.test-link:hover {
+            background: #ee5a24;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>👨‍💼 Админ-панель</h1>
+        
+        <div class="stats">
+            <div class="stat-card">
+                <div class="number">{{ stats.total }}</div>
+                <div class="label">Всего вызовов</div>
+            </div>
+            <div class="stat-card">
+                <div class="number">{{ stats.success }}</div>
+                <div class="label">Успешных</div>
+            </div>
+            <div class="stat-card">
+                <div class="number">{{ stats.failed }}</div>
+                <div class="label">Ошибок</div>
+            </div>
+        </div>
+        
+        <div class="log">
+            <h2>📋 История вызовов</h2>
+            {% if call_log %}
+                {% for entry in call_log[::-1] %}
+                <div class="entry">
+                    <span class="time">{{ entry.time }}</span>
+                    <span class="pc {% if entry.test %}test{% endif %}">
+                        {{ entry.pc }}
+                        {% if entry.test %}<span class="test-label">TEST</span>{% endif %}
+                    </span>
+                    — 
+                    <span class="{% if entry.status == 'ok' %}status-ok{% else %}status-err{% endif %}">
+                        {{ entry.message }}
+                    </span>
+                </div>
+                {% endfor %}
+            {% else %}
+                <div class="empty">📭 Вызовов пока нет</div>
+            {% endif %}
+        </div>
+        
+        <div class="links">
+            <a href="/client">📢 Форма вызова</a>
+            <a href="/admin" style="background: #6c757d;">🔄 Обновить</a>
+            <a href="/client" class="test-link" target="_blank">🧪 Открыть форму (новая вкладка)</a>
+        </div>
+        
+        <div style="margin-top: 20px; padding: 15px; background: #fff3cd; border-radius: 10px; border-left: 4px solid #ffc107;">
+            <strong>📌 Информация:</strong>
+            <ul style="margin: 10px 0 0 20px; color: #856404;">
+                <li>Основные окна: <strong>{{ prefix }}01</strong> — <strong>{{ prefix }}20</strong></li>
+                <li>Тестовое окно: <strong>{{ test_pc }}</strong></li>
+                <li>Форма доступна по адресу: <code>http://{{ ip }}:8080/client</code></li>
+            </ul>
+        </div>
+    </div>
 </body>
 </html>
 """
 
 # ================ API ЭНДПОИНТЫ ================
 
-@app.route('/')
-def form_page():
-    """Страница подачи заявки"""
-    return render_template_string(FORM_PAGE, ip=LOCAL_IP)
-
-@app.route('/track')
-def track_page():
-    """Страница отслеживания"""
-    return render_template_string(TRACK_PAGE)
+@app.route('/client')
+def client_page():
+    """Страница для вызова специалистов (только выбор окна)"""
+    return render_template_string(CLIENT_PAGE, 
+                                  prefix=COMPUTER_PREFIX, 
+                                  test_pc=TEST_COMPUTER)
 
 @app.route('/admin')
 def admin_page():
-    """Админ-панель"""
-    return render_template_string(ADMIN_PAGE, 
-                                  prefix=COMPUTER_PREFIX, 
-                                  test_pc=TEST_COMPUTER,
-                                  call_log=call_log)
-
-@app.route('/submit', methods=['POST'])
-def submit_request():
-    """Подача новой заявки"""
-    global request_counter
-    window = request.form.get('window', 'Не указано')
-    description = request.form.get('description', '')
-    
-    if not description:
-        return jsonify({'status': 'error', 'message': 'Опишите проблему'})
-    
-    request_data = {
-        'id': request_counter,
-        'window': window,
-        'description': description,
-        'time': datetime.now().strftime('%H:%M:%S'),
-        'status': 'Новая'
+    """Админ-панель с логом"""
+    stats = {
+        'total': len(call_log),
+        'success': sum(1 for c in call_log if c['status'] == 'ok'),
+        'failed': sum(1 for c in call_log if c['status'] == 'error')
     }
-    requests_data.append(request_data)
-    request_counter += 1
-    
-    return jsonify({'status': 'ok', 'number': request_data['id']})
-
-@app.route('/api/requests')
-def get_requests():
-    """Получение всех заявок"""
-    return jsonify(requests_data[::-1])  # Сначала новые
-
-@app.route('/api/update_status', methods=['POST'])
-def update_status():
-    """Обновление статуса заявки"""
-    data = request.json
-    req_id = data.get('id')
-    status = data.get('status')
-    
-    for req in requests_data:
-        if req['id'] == req_id:
-            req['status'] = status
-            return jsonify({'status': 'ok'})
-    return jsonify({'status': 'error', 'message': 'Заявка не найдена'})
-
-@app.route('/api/delete_request', methods=['POST'])
-def delete_request():
-    """Удаление заявки"""
-    data = request.json
-    req_id = data.get('id')
-    
-    global requests_data
-    requests_data = [req for req in requests_data if req['id'] != req_id]
-    return jsonify({'status': 'ok'})
+    return render_template_string(ADMIN_PAGE,
+                                  ip=LOCAL_IP,
+                                  prefix=COMPUTER_PREFIX,
+                                  test_pc=TEST_COMPUTER,
+                                  call_log=call_log,
+                                  stats=stats)
 
 @app.route('/api/call', methods=['POST'])
 def make_call():
@@ -1046,18 +543,14 @@ def send_msg(pc_name, test=False):
 # ================ ЗАПУСК ================
 if __name__ == '__main__':
     print("=" * 60)
-    print("🖥️  СЕРВЕР ЗАЯВОК И ВЫЗОВОВ ЗАПУЩЕН")
+    print("🖥️  СИСТЕМА ВЫЗОВА СПЕЦИАЛИСТОВ")
     print("=" * 60)
-    print(f"📋 Админ-панель:    http://127.0.0.1:8080/admin")
-    print(f"📝 Форма заявок:    http://{LOCAL_IP}:8080/")
-    print(f"📊 Отслеживание:    http://{LOCAL_IP}:8080/track")
+    print(f"📢 Форма вызова:     http://{LOCAL_IP}:8080/client")
+    print(f"👨‍💼 Админ-панель:    http://127.0.0.1:8080/admin")
     print("=" * 60)
-    print("✨ В админ-панели есть 3 вкладки:")
-    print("   📋 Заявки - управление заявками")
-    print("   🔔 Вызов специалистов - отправка сообщений (20 окон + тест)")
-    print("   🧪 ТЕСТ - быстрая проверка на WS0030601")
+    print(f"🧪 Тестовое окно: {TEST_COMPUTER}")
     print("=" * 60)
-    print(f"🧪 Тестовый компьютер: {TEST_COMPUTER}")
+    print("📌 На форме только выбор окна и кнопка ПОЗВАТЬ")
     print("=" * 60)
     
     threading.Timer(1.5, lambda: webbrowser.open("http://127.0.0.1:8080/admin")).start()
