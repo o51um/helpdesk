@@ -11,7 +11,7 @@ tickets = []
 clients = []  # Список подключенных клиентов SSE
 
 # ================== HTML ШАБЛОНЫ ==================
-# Форма для клиентов (с выбором окна и информацией о МФУ)
+# Форма для клиентов (с отслеживанием статуса)
 CLIENT_FORM = """
 <!DOCTYPE html>
 <html lang="ru">
@@ -21,9 +21,15 @@ CLIENT_FORM = """
     <title>Заявка в IT</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { font-family: 'Segoe UI', sans-serif; background: #e9ecef; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
-        .container { background: white; padding: 30px; border-radius: 12px; box-shadow: 0 8px 30px rgba(0,0,0,0.12); width: 100%; max-width: 500px; }
+        body { font-family: 'Segoe UI', sans-serif; background: #e9ecef; display: flex; justify-content: center; align-items: center; min-height: 100vh; padding: 20px; }
+        .container { background: white; padding: 30px; border-radius: 12px; box-shadow: 0 8px 30px rgba(0,0,0,0.12); width: 100%; max-width: 550px; }
         h2 { text-align: center; color: #333; margin-bottom: 20px; }
+        .tabs { display: flex; gap: 10px; margin-bottom: 20px; border-bottom: 2px solid #dee2e6; }
+        .tab { padding: 10px 20px; cursor: pointer; border: none; background: none; font-size: 14px; font-weight: 600; color: #6c757d; transition: all 0.3s; border-bottom: 3px solid transparent; }
+        .tab:hover { color: #007bff; }
+        .tab.active { color: #007bff; border-bottom-color: #007bff; }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
         label { display: block; margin-top: 14px; font-weight: 600; color: #495057; font-size: 0.9em; }
         label .required { color: #dc3545; }
         input, select, textarea { width: 100%; padding: 10px 12px; margin-top: 4px; border: 1px solid #ced4da; border-radius: 6px; font-size: 14px; transition: border-color 0.2s; font-family: inherit; }
@@ -42,68 +48,133 @@ CLIENT_FORM = """
         .info-block strong { color: #495057; }
         .info-block .mfu-info { color: #28a745; font-weight: 600; }
         .info-block .pc-info { color: #17a2b8; font-weight: 600; }
+        
+        /* Стили для отслеживания */
+        .track-container { padding: 10px 0; }
+        .track-select { margin-bottom: 20px; }
+        .track-info { background: #f8f9fa; padding: 20px; border-radius: 8px; min-height: 150px; }
+        .track-info .no-tickets { text-align: center; color: #adb5bd; padding: 30px 0; }
+        .track-info .ticket-item { border-bottom: 1px solid #dee2e6; padding: 15px 0; }
+        .track-info .ticket-item:last-child { border-bottom: none; }
+        .track-info .ticket-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; }
+        .track-info .ticket-title { font-weight: 600; color: #212529; }
+        .track-info .ticket-status { padding: 4px 12px; border-radius: 12px; font-size: 0.85em; font-weight: 600; }
+        .status-delivered { background: #cce5ff; color: #004085; }
+        .status-progress { background: #fff3cd; color: #856404; }
+        .status-resolved { background: #d4edda; color: #155724; }
+        .track-info .ticket-desc { color: #495057; margin-top: 8px; font-size: 0.95em; }
+        .track-info .ticket-meta { color: #6c757d; font-size: 0.85em; margin-top: 5px; }
+        .track-info .ticket-time { color: #adb5bd; font-size: 0.8em; margin-top: 5px; }
+        .status-badge { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
+        .status-badge.delivered { background: #007bff; }
+        .status-badge.progress { background: #ffc107; }
+        .status-badge.resolved { background: #28a745; }
+        .refresh-track { padding: 8px 16px; background: #28a745; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; margin-top: 10px; }
+        .refresh-track:hover { background: #218838; }
+        .track-empty { text-align: center; padding: 40px 20px; color: #6c757d; }
+        .track-empty .icon { font-size: 48px; margin-bottom: 10px; }
     </style>
 </head>
 <body>
     <div class="container">
         <h2>🔧 Заявка на ремонт</h2>
-        <form id="ticketForm">
-            <!-- Филиал (фиксированный) -->
-            <input type="hidden" id="branch" value="№3">
+        
+        <!-- Вкладки -->
+        <div class="tabs">
+            <button class="tab active" data-tab="create" onclick="switchTab('create')">📝 Создать заявку</button>
+            <button class="tab" data-tab="track" onclick="switchTab('track')">📊 Отследить заявку</button>
+        </div>
+        
+        <!-- Вкладка: Создание заявки -->
+        <div class="tab-content active" id="tab-create">
+            <form id="ticketForm">
+                <input type="hidden" id="branch" value="№3">
 
-            <!-- 1. Фамилия и Имя -->
-            <label><span class="required">*</span> Фамилия и Имя</label>
-            <input type="text" id="full_name" placeholder="Например: Иванов Иван" required>
+                <label><span class="required">*</span> Фамилия и Имя</label>
+                <input type="text" id="full_name" placeholder="Например: Иванов Иван" required>
 
-            <!-- 2. Номер окна -->
-            <label><span class="required">*</span> Номер окна</label>
-            <select id="window_number" required>
-                <option value="">-- Выберите окно --</option>
-                <option value="1">Окно №1</option>
-                <option value="2">Окно №2</option>
-                <option value="3">Окно №3</option>
-                <option value="4">Окно №4</option>
-                <option value="5">Окно №5</option>
-                <option value="6">Окно №6</option>
-                <option value="7">Окно №7</option>
-                <option value="8">Окно №8</option>
-                <option value="9">Окно №9</option>
-                <option value="10">Окно №10</option>
-                <option value="11">Окно №11</option>
-                <option value="12">Окно №12</option>
-                <option value="13">Окно №13</option>
-                <option value="14">Окно №14</option>
-                <option value="15">Окно №15</option>
-                <option value="16">Окно №16</option>
-                <option value="17">Окно №17</option>
-                <option value="18">Окно №18</option>
-                <option value="19">Окно №19</option>
-                <option value="20">Окно №20</option>
-            </select>
+                <label><span class="required">*</span> Номер окна</label>
+                <select id="window_number" required>
+                    <option value="">-- Выберите окно --</option>
+                    <option value="1">Окно №1</option>
+                    <option value="2">Окно №2</option>
+                    <option value="3">Окно №3</option>
+                    <option value="4">Окно №4</option>
+                    <option value="5">Окно №5</option>
+                    <option value="6">Окно №6</option>
+                    <option value="7">Окно №7</option>
+                    <option value="8">Окно №8</option>
+                    <option value="9">Окно №9</option>
+                    <option value="10">Окно №10</option>
+                    <option value="11">Окно №11</option>
+                    <option value="12">Окно №12</option>
+                    <option value="13">Окно №13</option>
+                    <option value="14">Окно №14</option>
+                    <option value="15">Окно №15</option>
+                    <option value="16">Окно №16</option>
+                    <option value="17">Окно №17</option>
+                    <option value="18">Окно №18</option>
+                    <option value="19">Окно №19</option>
+                    <option value="20">Окно №20</option>
+                </select>
 
-            <!-- 3. Информация о МФУ и компьютере -->
-            <div class="info-block">
-                <div><strong>📄 МФУ:</strong> <span class="mfu-info" id="mfu_display">Выберите окно</span></div>
-                <div><strong>💻 Имя компьютера:</strong> <span class="pc-info" id="pc_display">Выберите окно</span></div>
+                <div class="info-block">
+                    <div><strong>📄 МФУ:</strong> <span class="mfu-info" id="mfu_display">Выберите окно</span></div>
+                    <div><strong>💻 Имя компьютера:</strong> <span class="pc-info" id="pc_display">Выберите окно</span></div>
+                </div>
+
+                <label><span class="required">*</span> Описание поломки</label>
+                <textarea id="description" placeholder="Опишите подробно, что случилось..." required></textarea>
+
+                <div class="checkbox-group">
+                    <input type="checkbox" id="urgent">
+                    <label for="urgent">⚠️ Срочная заявка</label>
+                </div>
+
+                <button type="submit">📨 Отправить заявку</button>
+                <div id="message"></div>
+            </form>
+        </div>
+        
+        <!-- Вкладка: Отслеживание -->
+        <div class="tab-content" id="tab-track">
+            <div class="track-container">
+                <div class="track-select">
+                    <label>🔍 Выберите окно для отслеживания</label>
+                    <select id="track_window" onchange="trackTickets()">
+                        <option value="">-- Выберите окно --</option>
+                        <option value="1">Окно №1</option>
+                        <option value="2">Окно №2</option>
+                        <option value="3">Окно №3</option>
+                        <option value="4">Окно №4</option>
+                        <option value="5">Окно №5</option>
+                        <option value="6">Окно №6</option>
+                        <option value="7">Окно №7</option>
+                        <option value="8">Окно №8</option>
+                        <option value="9">Окно №9</option>
+                        <option value="10">Окно №10</option>
+                        <option value="11">Окно №11</option>
+                        <option value="12">Окно №12</option>
+                        <option value="13">Окно №13</option>
+                        <option value="14">Окно №14</option>
+                        <option value="15">Окно №15</option>
+                        <option value="16">Окно №16</option>
+                        <option value="17">Окно №17</option>
+                        <option value="18">Окно №18</option>
+                        <option value="19">Окно №19</option>
+                        <option value="20">Окно №20</option>
+                    </select>
+                    <button class="refresh-track" onclick="trackTickets()">🔄 Обновить</button>
+                </div>
+                <div class="track-info" id="trackInfo">
+                    <div class="no-tickets">📋 Выберите окно для просмотра заявок</div>
+                </div>
             </div>
-
-            <!-- 4. Поломка -->
-            <label><span class="required">*</span> Описание поломки</label>
-            <textarea id="description" placeholder="Опишите подробно, что случилось..." required></textarea>
-
-            <!-- Срочность -->
-            <div class="checkbox-group">
-                <input type="checkbox" id="urgent">
-                <label for="urgent">⚠️ Срочная заявка</label>
-            </div>
-
-            <button type="submit">📨 Отправить заявку</button>
-            <div id="message"></div>
-        </form>
+        </div>
     </div>
 
     <script>
-        // Данные по окнам (МФУ и имя компьютера)
+        // Данные по окнам
         const windowData = {
             1: { mfu: "Kyocera M2040dn", pc: "PC-01" },
             2: { mfu: "HP LaserJet M404", pc: "PC-02" },
@@ -127,7 +198,20 @@ CLIENT_FORM = """
             20: { mfu: "Brother MFC-L5750DW", pc: "PC-20" }
         };
 
-        // Обновление информации при выборе окна
+        // Переключение вкладок
+        function switchTab(tab) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            
+            document.querySelector(`.tab[data-tab="${tab}"]`).classList.add('active');
+            document.getElementById(`tab-${tab}`).classList.add('active');
+            
+            if (tab === 'track') {
+                trackTickets();
+            }
+        }
+
+        // Обновление информации о МФУ
         document.getElementById('window_number').addEventListener('change', function() {
             const windowNum = this.value;
             const mfuDisplay = document.getElementById('mfu_display');
@@ -146,6 +230,7 @@ CLIENT_FORM = """
             }
         });
 
+        // Отправка заявки
         document.getElementById('ticketForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             const msgDiv = document.getElementById('message');
@@ -153,8 +238,6 @@ CLIENT_FORM = """
             msgDiv.style.display = 'none';
 
             const windowNum = document.getElementById('window_number').value;
-            
-            // Получаем данные по окну
             const windowInfo = windowData[windowNum] || { mfu: 'Неизвестно', pc: 'Неизвестно' };
 
             const data = {
@@ -167,7 +250,6 @@ CLIENT_FORM = """
                 urgent: document.getElementById('urgent').checked
             };
 
-            // Проверка обязательных полей
             if (!data.full_name || !data.window_number || !data.description) {
                 msgDiv.className = 'error';
                 msgDiv.textContent = '❌ Заполните все обязательные поля!';
@@ -196,6 +278,104 @@ CLIENT_FORM = """
                 msgDiv.className = 'error';
                 msgDiv.textContent = '❌ ' + err.message;
                 msgDiv.style.display = 'block';
+            }
+        });
+
+        // Функция отслеживания заявок по окну
+        async function trackTickets() {
+            const windowNum = document.getElementById('track_window').value;
+            const trackInfo = document.getElementById('trackInfo');
+            
+            if (!windowNum) {
+                trackInfo.innerHTML = '<div class="no-tickets">📋 Выберите окно для просмотра заявок</div>';
+                return;
+            }
+
+            try {
+                const response = await fetch(`/get_tickets_by_window?window=${windowNum}`);
+                const data = await response.json();
+                
+                if (data.tickets && data.tickets.length > 0) {
+                    // Группируем заявки по статусам
+                    const grouped = {
+                        delivered: data.tickets.filter(t => t.status === 'delivered'),
+                        'in-progress': data.tickets.filter(t => t.status === 'in-progress'),
+                        resolved: data.tickets.filter(t => t.status === 'resolved')
+                    };
+                    
+                    let html = `<h3 style="margin-top: 0; color: #212529;">🪟 Заявки для окна №${windowNum}</h3>`;
+                    html += `<p style="color: #6c757d; font-size: 0.9em;">Всего заявок: ${data.tickets.length}</p>`;
+                    
+                    // Функция для отображения группы заявок
+                    function renderTicketGroup(tickets, status, statusName, statusClass, icon) {
+                        if (tickets.length === 0) return '';
+                        return `
+                            <div style="margin-top: 15px;">
+                                <h4 style="color: #495057; margin-bottom: 10px;">${icon} ${statusName} (${tickets.length})</h4>
+                                ${tickets.map(ticket => `
+                                    <div class="ticket-item">
+                                        <div class="ticket-header">
+                                            <span class="ticket-title">👤 ${ticket.full_name}</span>
+                                            <span class="ticket-status ${statusClass}">
+                                                <span class="status-badge ${status === 'delivered' ? 'delivered' : status === 'in-progress' ? 'progress' : 'resolved'}"></span>
+                                                ${statusName}
+                                            </span>
+                                        </div>
+                                        <div class="ticket-desc">${ticket.description}</div>
+                                        <div class="ticket-meta">
+                                            📄 ${ticket.mfu || 'Не указано'} | 💻 ${ticket.pc_name || 'Не указано'}
+                                            ${ticket.urgent ? ' | ⚠️ СРОЧНО' : ''}
+                                        </div>
+                                        <div class="ticket-time">🕒 ${ticket.time}</div>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        `;
+                    }
+                    
+                    html += renderTicketGroup(grouped.delivered, 'delivered', '📩 Доставлено', 'status-delivered', '📩');
+                    html += renderTicketGroup(grouped['in-progress'], 'in-progress', '🔧 В работе', 'status-progress', '🔧');
+                    html += renderTicketGroup(grouped.resolved, 'resolved', '✅ Решено', 'status-resolved', '✅');
+                    
+                    trackInfo.innerHTML = html;
+                } else {
+                    trackInfo.innerHTML = `
+                        <div class="track-empty">
+                            <div class="icon">📭</div>
+                            <p>Для окна №${windowNum} нет заявок</p>
+                            <p style="font-size: 0.9em; color: #adb5bd;">Создайте новую заявку на вкладке "Создать заявку"</p>
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                trackInfo.innerHTML = '<div class="no-tickets" style="color: #dc3545;">❌ Ошибка загрузки данных</div>';
+            }
+        }
+
+        // Автоматическое обновление каждые 10 секунд, если вкладка активна
+        let trackInterval = null;
+        
+        // Следим за переключением вкладок
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', function() {
+                if (this.dataset.tab === 'track') {
+                    if (trackInterval) clearInterval(trackInterval);
+                    trackInterval = setInterval(trackTickets, 10000);
+                } else {
+                    if (trackInterval) {
+                        clearInterval(trackInterval);
+                        trackInterval = null;
+                    }
+                }
+            });
+        });
+
+        // Начальная инициализация
+        document.addEventListener('DOMContentLoaded', function() {
+            // Запускаем автообновление если вкладка "Отследить" активна
+            if (document.querySelector('.tab[data-tab="track"]').classList.contains('active')) {
+                trackInterval = setInterval(trackTickets, 10000);
             }
         });
     </script>
@@ -306,12 +486,10 @@ ADMIN_PANEL = """
         let currentFilter = 'all';
         let ticketIdCounter = 0;
         
-        // Функция для отображения заявок
         function renderTickets() {
             const container = document.getElementById('tickets-container');
             const counter = document.getElementById('counter');
             
-            // Подсчет статистики
             const total = tickets.length;
             const delivered = tickets.filter(t => t.status === 'delivered').length;
             const inProgress = tickets.filter(t => t.status === 'in-progress').length;
@@ -323,7 +501,6 @@ ADMIN_PANEL = """
             document.getElementById('resolvedCount').textContent = resolved;
             counter.textContent = total;
             
-            // Фильтрация
             let filteredTickets = tickets;
             if (currentFilter === 'delivered') {
                 filteredTickets = tickets.filter(t => t.status === 'delivered');
@@ -338,7 +515,6 @@ ADMIN_PANEL = """
                 return;
             }
             
-            // Показываем в обратном порядке (сначала новые)
             const reversed = [...filteredTickets].reverse();
             
             container.innerHTML = reversed.map(ticket => {
@@ -378,7 +554,6 @@ ADMIN_PANEL = """
             `}).join('');
         }
         
-        // Обновление статуса заявки
         async function updateStatus(ticketId, newStatus) {
             try {
                 const response = await fetch('/update_status', {
@@ -388,7 +563,6 @@ ADMIN_PANEL = """
                 });
                 const result = await response.json();
                 if (result.status === 'ok') {
-                    // Обновляем локально
                     const ticket = tickets.find(t => t.id === ticketId);
                     if (ticket) {
                         ticket.status = newStatus;
@@ -404,7 +578,6 @@ ADMIN_PANEL = """
             }
         }
         
-        // Удаление заявки
         async function deleteTicket(ticketId) {
             if (!confirm('Удалить эту заявку?')) return;
             
@@ -427,7 +600,6 @@ ADMIN_PANEL = """
             }
         }
         
-        // Уведомление о смене статуса
         function showStatusNotification(ticket, status) {
             const statusNames = {
                 'delivered': '📩 Доставлено',
@@ -447,7 +619,6 @@ ADMIN_PANEL = """
             }, 3000);
         }
         
-        // Фильтрация заявок
         function setFilter(filter) {
             currentFilter = filter;
             document.querySelectorAll('.filter-btn').forEach(btn => {
@@ -459,7 +630,6 @@ ADMIN_PANEL = """
             renderTickets();
         }
         
-        // Подключение к SSE
         function connectSSE() {
             const eventSource = new EventSource('/stream');
             
@@ -496,7 +666,6 @@ ADMIN_PANEL = """
             };
         }
         
-        // Уведомление о новой заявке
         function showNotification(ticket) {
             const toast = document.createElement('div');
             toast.className = 'toast';
@@ -510,14 +679,12 @@ ADMIN_PANEL = """
             }, 5000);
         }
         
-        // Очистка всех заявок
         async function clearAllTickets() {
             if (confirm('Удалить ВСЕ заявки?')) {
                 await fetch('/clear', { method: 'POST' });
             }
         }
         
-        // Запускаем SSE
         connectSSE();
     </script>
 </body>
@@ -629,6 +796,19 @@ def delete_ticket():
     
     return jsonify({"status": "error", "message": "Заявка не найдена"}), 404
 
+@app.route('/get_tickets_by_window', methods=['GET'])
+def get_tickets_by_window():
+    window_num = request.args.get('window')
+    
+    if not window_num:
+        return jsonify({"status": "error", "message": "Не указан номер окна"}), 400
+    
+    # Ищем заявки по окну (сортируем по времени - новые сверху)
+    window_tickets = [t for t in tickets if str(t.get('window_number')) == str(window_num)]
+    window_tickets.sort(key=lambda x: x.get('time', ''), reverse=True)
+    
+    return jsonify({"status": "ok", "tickets": window_tickets}), 200
+
 @app.route('/clear', methods=['POST'])
 def clear():
     count = len(tickets)
@@ -648,6 +828,7 @@ if __name__ == '__main__':
     print("=" * 60)
     print("✨ Заявки теперь отображаются МГНОВЕННО!")
     print("📌 Статусы: Доставлено → В работе → Решено")
+    print("📊 Клиенты могут отслеживать статус своих заявок по окну")
     print("=" * 60)
     
     threading.Timer(1.5, lambda: webbrowser.open("http://127.0.0.1:8080/admin")).start()
