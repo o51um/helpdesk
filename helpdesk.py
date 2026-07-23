@@ -1,568 +1,456 @@
-import telebot
-import sqlite3
-import os
+from flask import Flask, request, jsonify, render_template_string, Response
 from datetime import datetime
-from dotenv import load_dotenv
-from telebot import types
-import pytz
+import threading
+import webbrowser
+import socket
+import json
+import time
 
-load_dotenv()
+app = Flask(__name__)
+tickets = []
+clients = []  # Список подключенных клиентов SSE
 
-BOT_TOKEN = os.getenv('BOT_TOKEN')
-ADMIN_CHAT_ID = os.getenv('ADMIN_CHAT_ID')
+# ================== HTML ШАБЛОНЫ ==================
+# Форма для клиентов (с выбором окна и информацией о МФУ)
+CLIENT_FORM = """
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Заявка в IT</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Segoe UI', sans-serif; background: #e9ecef; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+        .container { background: white; padding: 30px; border-radius: 12px; box-shadow: 0 8px 30px rgba(0,0,0,0.12); width: 100%; max-width: 500px; }
+        h2 { text-align: center; color: #333; margin-bottom: 20px; }
+        label { display: block; margin-top: 14px; font-weight: 600; color: #495057; font-size: 0.9em; }
+        label .required { color: #dc3545; }
+        input, select, textarea { width: 100%; padding: 10px 12px; margin-top: 4px; border: 1px solid #ced4da; border-radius: 6px; font-size: 14px; transition: border-color 0.2s; font-family: inherit; }
+        input:focus, select:focus, textarea:focus { outline: none; border-color: #4dabf7; box-shadow: 0 0 0 3px rgba(77,171,247,0.15); }
+        textarea { resize: vertical; min-height: 100px; }
+        .checkbox-group { display: flex; align-items: center; margin-top: 16px; }
+        .checkbox-group input { width: auto; margin-right: 10px; accent-color: #dc3545; transform: scale(1.2); }
+        .checkbox-group label { margin-top: 0; color: #dc3545; cursor: pointer; }
+        button { width: 100%; padding: 12px; margin-top: 22px; background: #007bff; color: white; border: none; border-radius: 6px; font-size: 16px; font-weight: 600; cursor: pointer; transition: background 0.2s; }
+        button:hover { background: #0056b3; }
+        button:active { transform: scale(0.98); }
+        #message { margin-top: 15px; padding: 12px; border-radius: 6px; text-align: center; display: none; font-weight: 500; }
+        .success { background: #d4edda; color: #155724; display: block !important; }
+        .error { background: #f8d7da; color: #721c24; display: block !important; }
+        .info-block { background: #f8f9fa; padding: 15px; border-radius: 6px; margin-top: 10px; border-left: 4px solid #007bff; }
+        .info-block strong { color: #495057; }
+        .info-block .mfu-info { color: #28a745; font-weight: 600; }
+        .info-block .pc-info { color: #17a2b8; font-weight: 600; }
+        select[multiple] { height: auto; min-height: 80px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>🔧 Заявка на ремонт</h2>
+        <form id="ticketForm">
+            <!-- Филиал (фиксированный) -->
+            <input type="hidden" id="branch" value="№3">
 
-if not BOT_TOKEN:
-    raise ValueError("BOT_TOKEN не найден в переменных окружения!")
+            <!-- 1. Фамилия и Имя -->
+            <label><span class="required">*</span> Фамилия и Имя</label>
+            <input type="text" id="full_name" placeholder="Например: Иванов Иван" required>
 
-if not ADMIN_CHAT_ID:
-    raise ValueError("ADMIN_CHAT_ID не найден в переменных окружения!")
+            <!-- 2. Номер окна -->
+            <label><span class="required">*</span> Номер окна</label>
+            <select id="window_number" required>
+                <option value="">-- Выберите окно --</option>
+                <option value="1">Окно №1</option>
+                <option value="2">Окно №2</option>
+                <option value="3">Окно №3</option>
+                <option value="4">Окно №4</option>
+                <option value="5">Окно №5</option>
+                <option value="6">Окно №6</option>
+                <option value="7">Окно №7</option>
+                <option value="8">Окно №8</option>
+                <option value="9">Окно №9</option>
+                <option value="10">Окно №10</option>
+                <option value="11">Окно №11</option>
+                <option value="12">Окно №12</option>
+                <option value="13">Окно №13</option>
+                <option value="14">Окно №14</option>
+                <option value="15">Окно №15</option>
+                <option value="16">Окно №16</option>
+                <option value="17">Окно №17</option>
+                <option value="18">Окно №18</option>
+                <option value="19">Окно №19</option>
+                <option value="20">Окно №20</option>
+            </select>
 
-try:
-    ADMIN_CHAT_ID = int(ADMIN_CHAT_ID)
-except ValueError:
-    pass
+            <!-- 3. Информация о МФУ и компьютере -->
+            <div class="info-block">
+                <div><strong>📄 МФУ:</strong> <span class="mfu-info" id="mfu_display">Выберите окно</span></div>
+                <div><strong>💻 Имя компьютера:</strong> <span class="pc-info" id="pc_display">Выберите окно</span></div>
+            </div>
 
-bot = telebot.TeleBot(BOT_TOKEN)
+            <!-- 4. Поломка -->
+            <label><span class="required">*</span> Описание поломки</label>
+            <textarea id="description" placeholder="Опишите подробно, что случилось..." required></textarea>
 
-# Настройка временной зоны Владивосток (UTC+10)
-VLADIVOSTOK_TZ = pytz.timezone('Asia/Vladivostok')
+            <!-- Срочность -->
+            <div class="checkbox-group">
+                <input type="checkbox" id="urgent">
+                <label for="urgent">⚠️ Срочная заявка</label>
+            </div>
 
-def get_current_time():
-    """Возвращает текущее время во Владивостоке"""
-    return datetime.now(VLADIVOSTOK_TZ).strftime("%d.%m.%Y %H:%M")
+            <button type="submit">📨 Отправить заявку</button>
+            <div id="message"></div>
+        </form>
+    </div>
 
-# Инициализация базы данных
-def init_db():
-    conn = sqlite3.connect('tickets.db')
-    cursor = conn.cursor()
-    
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            user_id INTEGER PRIMARY KEY,
-            username TEXT,
-            full_name TEXT,
-            last_known_name TEXT
-        )
-    ''')
-    
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS tickets (
-            ticket_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            name TEXT,
-            workplace TEXT,
-            problem TEXT,
-            photo_id TEXT,
-            status TEXT DEFAULT 'Новая',
-            created_at TEXT,
-            admin_comment TEXT,
-            FOREIGN KEY (user_id) REFERENCES users (user_id)
-        )
-    ''')
-    
-    conn.commit()
-    conn.close()
+    <script>
+        // Данные по окнам (МФУ и имя компьютера)
+        const windowData = {
+            1: { mfu: "Kyocera M2040dn", pc: "PC-01" },
+            2: { mfu: "HP LaserJet M404", pc: "PC-02" },
+            3: { mfu: "Xerox WorkCentre 6515", pc: "PC-03" },
+            4: { mfu: "Canon i-SENSYS MF743Cdw", pc: "PC-04" },
+            5: { mfu: "Brother MFC-L5750DW", pc: "PC-05" },
+            6: { mfu: "Kyocera M2040dn", pc: "PC-06" },
+            7: { mfu: "HP LaserJet M404", pc: "PC-07" },
+            8: { mfu: "Xerox WorkCentre 6515", pc: "PC-08" },
+            9: { mfu: "Canon i-SENSYS MF743Cdw", pc: "PC-09" },
+            10: { mfu: "Brother MFC-L5750DW", pc: "PC-10" },
+            11: { mfu: "Kyocera M2040dn", pc: "PC-11" },
+            12: { mfu: "HP LaserJet M404", pc: "PC-12" },
+            13: { mfu: "Xerox WorkCentre 6515", pc: "PC-13" },
+            14: { mfu: "Canon i-SENSYS MF743Cdw", pc: "PC-14" },
+            15: { mfu: "Brother MFC-L5750DW", pc: "PC-15" },
+            16: { mfu: "Kyocera M2040dn", pc: "PC-16" },
+            17: { mfu: "HP LaserJet M404", pc: "PC-17" },
+            18: { mfu: "Xerox WorkCentre 6515", pc: "PC-18" },
+            19: { mfu: "Canon i-SENSYS MF743Cdw", pc: "PC-19" },
+            20: { mfu: "Brother MFC-L5750DW", pc: "PC-20" }
+        };
 
-def save_user_name(user_id, name):
-    conn = sqlite3.connect('tickets.db')
-    cursor = conn.cursor()
-    cursor.execute('''
-        INSERT OR REPLACE INTO users (user_id, last_known_name) 
-        VALUES (?, ?)
-    ''', (user_id, name))
-    conn.commit()
-    conn.close()
-
-def get_user_name(user_id):
-    conn = sqlite3.connect('tickets.db')
-    cursor = conn.cursor()
-    cursor.execute('SELECT last_known_name FROM users WHERE user_id = ?', (user_id,))
-    result = cursor.fetchone()
-    conn.close()
-    return result[0] if result else None
-
-def save_ticket(user_id, name, workplace, problem, photo_id=None):
-    conn = sqlite3.connect('tickets.db')
-    cursor = conn.cursor()
-    created_at = get_current_time()  # Используем время Владивостока
-    
-    cursor.execute('''
-        INSERT INTO tickets (user_id, name, workplace, problem, photo_id, created_at, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    ''', (user_id, name, workplace, problem, photo_id, created_at, 'Новая'))
-    
-    ticket_id = cursor.lastrowid
-    conn.commit()
-    conn.close()
-    return ticket_id
-
-def update_ticket_status(ticket_id, status, admin_comment=None):
-    conn = sqlite3.connect('tickets.db')
-    cursor = conn.cursor()
-    
-    if admin_comment:
-        cursor.execute('''
-            UPDATE tickets 
-            SET status = ?, admin_comment = ? 
-            WHERE ticket_id = ?
-        ''', (status, admin_comment, ticket_id))
-    else:
-        cursor.execute('''
-            UPDATE tickets 
-            SET status = ? 
-            WHERE ticket_id = ?
-        ''', (status, ticket_id))
-    
-    conn.commit()
-    conn.close()
-
-def get_ticket_info(ticket_id):
-    conn = sqlite3.connect('tickets.db')
-    cursor = conn.cursor()
-    cursor.execute('''
-        SELECT ticket_id, user_id, name, workplace, problem, photo_id, status, created_at, admin_comment
-        FROM tickets WHERE ticket_id = ?
-    ''', (ticket_id,))
-    result = cursor.fetchone()
-    conn.close()
-    return result
-
-user_data = {}
-
-# Команда /start
-@bot.message_handler(commands=['start'])
-def start(message):
-    user_id = message.from_user.id
-    
-    if message.chat.type == 'private':
-        saved_name = get_user_name(user_id)
-        
-        markup = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
-        btn1 = types.KeyboardButton('📝 Новая заявка')
-        btn2 = types.KeyboardButton('📋 Мои заявки')
-        markup.add(btn1, btn2)
-        
-        if saved_name:
-            bot.reply_to(message, 
-                f"👋 Привет, {saved_name}!\n"
-                "Что хочешь сделать?",
-                reply_markup=markup
-            )
-        else:
-            bot.reply_to(message, 
-                "👋 Привет! Давай создадим заявку о поломке.\n\n"
-                "🔹 Для начала, как тебя зовут? (Имя и Фамилия)"
-            )
-            user_data[user_id] = {'step': 'name'}
-    else:
-        bot.reply_to(message, 
-            "🤖 Я работаю в личных сообщениях.\n"
-            "Напиши мне в личку."
-        )
-
-@bot.message_handler(func=lambda message: message.text in ['📝 Новая заявка', '📋 Мои заявки'])
-def handle_buttons(message):
-    user_id = message.from_user.id
-    text = message.text
-    
-    if text == '📝 Новая заявка':
-        saved_name = get_user_name(user_id)
-        if saved_name:
-            bot.reply_to(message, 
-                "📍 Укажи рабочее место, где произошла поломка:\n"
-                "(Например: Кабинет 301, Склад, Цех №5)"
-            )
-            user_data[user_id] = {
-                'step': 'workplace', 
-                'name': saved_name
+        // Обновление информации при выборе окна
+        document.getElementById('window_number').addEventListener('change', function() {
+            const windowNum = this.value;
+            const mfuDisplay = document.getElementById('mfu_display');
+            const pcDisplay = document.getElementById('pc_display');
+            
+            if (windowNum && windowData[windowNum]) {
+                mfuDisplay.textContent = windowData[windowNum].mfu;
+                pcDisplay.textContent = windowData[windowNum].pc;
+                mfuDisplay.style.color = '#28a745';
+                pcDisplay.style.color = '#17a2b8';
+            } else {
+                mfuDisplay.textContent = 'Выберите окно';
+                pcDisplay.textContent = 'Выберите окно';
+                mfuDisplay.style.color = '#dc3545';
+                pcDisplay.style.color = '#dc3545';
             }
-        else:
-            bot.reply_to(message, 
-                "🔹 Как тебя зовут? (Имя и Фамилия)"
-            )
-            user_data[user_id] = {'step': 'name'}
-    
-    elif text == '📋 Мои заявки':
-        show_user_tickets(message)
+        });
 
-def show_user_tickets(message):
-    user_id = message.from_user.id
-    conn = sqlite3.connect('tickets.db')
-    cursor = conn.cursor()
-    cursor.execute('''
-        SELECT ticket_id, status, problem, created_at 
-        FROM tickets 
-        WHERE user_id = ? 
-        ORDER BY ticket_id DESC 
-        LIMIT 10
-    ''', (user_id,))
-    tickets = cursor.fetchall()
-    conn.close()
-    
-    if not tickets:
-        bot.reply_to(message, 
-            "📭 У вас пока нет заявок.\n"
-            "Нажмите '📝 Новая заявка' чтобы создать."
-        )
-        return
-    
-    response = "📋 **Ваши заявки:**\n\n"
-    for ticket in tickets:
-        status_emoji = {
-            'Новая': '🆕',
-            'В работе': '🔄',
-            'Принята': '✅',
-            'Отклонена': '❌',
-            'Завершена': '🎉'
-        }.get(ticket[1], '📌')
-        
-        response += f"#{ticket[0]} {status_emoji} {ticket[1]}\n"
-        response += f"📝 {ticket[2][:50]}...\n"
-        response += f"📅 {ticket[3]} (Владивосток)\n\n"
-    
-    bot.reply_to(message, response, parse_mode='Markdown')
+        document.getElementById('ticketForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const msgDiv = document.getElementById('message');
+            msgDiv.className = '';
+            msgDiv.style.display = 'none';
 
-@bot.message_handler(content_types=['text'])
-def handle_text(message):
-    user_id = message.from_user.id
-    text = message.text.strip()
-    
-    if message.chat.type != 'private':
-        return
-    
-    if text in ['📝 Новая заявка', '📋 Мои заявки']:
-        return
-    
-    if user_id not in user_data:
-        start(message)
-        return
-    
-    step = user_data[user_id].get('step')
-    
-    if step == 'name':
-        if len(text.split()) >= 2:
-            user_data[user_id]['name'] = text
-            save_user_name(user_id, text)
-            user_data[user_id]['step'] = 'workplace'
-            bot.reply_to(message, 
-                f"✅ Отлично, {text}!\n\n"
-                "📍 Теперь укажи рабочее место, где произошла поломка:\n"
-                "(Например: ТОСП, Тополево, Обработка, 4 место)"
-            )
-        else:
-            bot.reply_to(message, 
-                "❌ Пожалуйста, введите полное имя (Имя и Фамилия).\n"
-                "Например: Иван Петров"
-            )
-    
-    elif step == 'workplace':
-        user_data[user_id]['workplace'] = text
-        user_data[user_id]['step'] = 'problem'
-        bot.reply_to(message, 
-            "🔧 Отлично! Теперь опиши суть проблемы:\n"
-            "(Что именно сломалось, что не работает, и т.д.)"
-        )
-    
-    elif step == 'problem' and not user_data[user_id].get('waiting_for_photo'):
-        user_data[user_id]['problem'] = text
-        bot.reply_to(message, 
-            "📸 Хочешь прикрепить фото?\n"
-            "Отправь фото сейчас, или нажми /skip чтобы пропустить.",
-            reply_markup=types.ReplyKeyboardRemove()
-        )
-        user_data[user_id]['waiting_for_photo'] = True
-    
-    elif text == '/skip':
-        if user_data[user_id].get('waiting_for_photo'):
-            finish_request(user_id)
-    
-    else:
-        bot.reply_to(message, "⚠️ Не понимаю. Нажми /start чтобы начать.")
-
-@bot.message_handler(content_types=['photo'])
-def handle_photo(message):
-    user_id = message.from_user.id
-    
-    if message.chat.type != 'private':
-        return
-    
-    if user_id not in user_data:
-        start(message)
-        return
-    
-    if user_data[user_id].get('waiting_for_photo'):
-        file_id = message.photo[-1].file_id
-        user_data[user_id]['photo'] = file_id
-        
-        if message.caption:
-            user_data[user_id]['problem'] = message.caption.strip()
-        
-        finish_request(user_id)
-    else:
-        bot.reply_to(message, 
-            "📸 Фото принято! Но сначала создай заявку через /start"
-        )
-
-@bot.message_handler(commands=['skip'])
-def skip_photo(message):
-    user_id = message.from_user.id
-    if user_id in user_data and user_data[user_id].get('waiting_for_photo'):
-        finish_request(user_id)
-
-def finish_request(user_id):
-    data = user_data[user_id]
-    name = data.get('name', 'Не указано')
-    workplace = data.get('workplace', 'Не указано')
-    problem = data.get('problem', 'Не указано')
-    photo = data.get('photo')
-    
-    ticket_id = save_ticket(user_id, name, workplace, problem, photo)
-    
-    current_time = get_current_time()  # Время Владивостока
-    message_text = (
-        f"🆕 **НОВАЯ ЗАЯВКА #{ticket_id}**\n"
-        f"━━━━━━━━━━━━━━━━━━━\n"
-        f"👤 **Заявитель:** {name}\n"
-        f"📍 **Место:** {workplace}\n"
-        f"🔧 **Проблема:** {problem}\n"
-        f"⏰ **Время:** {current_time} (Владивосток)\n"
-        f"🆔 **ID:** {user_id}\n"
-    )
-    
-    # Кнопки для админа
-    markup = types.InlineKeyboardMarkup(row_width=3)
-    btn1 = types.InlineKeyboardButton('✅ Принята', callback_data=f'status_{ticket_id}_Принята')
-    btn2 = types.InlineKeyboardButton('🔄 В работе', callback_data=f'status_{ticket_id}_В работе')
-    btn3 = types.InlineKeyboardButton('🎉 Завершена', callback_data=f'status_{ticket_id}_Завершена')
-    btn4 = types.InlineKeyboardButton('❌ Отклонена', callback_data=f'status_{ticket_id}_Отклонена')
-    btn5 = types.InlineKeyboardButton('📝 Ответить', callback_data=f'reply_{ticket_id}')
-    markup.add(btn1, btn2, btn3, btn4, btn5)
-    
-    try:
-        if photo:
-            bot.send_photo(
-                ADMIN_CHAT_ID,
-                photo,
-                caption=message_text,
-                parse_mode='Markdown',
-                reply_markup=markup
-            )
-        else:
-            bot.send_message(
-                ADMIN_CHAT_ID,
-                message_text,
-                parse_mode='Markdown',
-                reply_markup=markup
-            )
-        
-        markup = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
-        btn1 = types.KeyboardButton('📝 Новая заявка')
-        btn2 = types.KeyboardButton('📋 Мои заявки')
-        markup.add(btn1, btn2)
-        
-        bot.send_message(
-            user_id,
-            f"✅ **Заявка #{ticket_id} успешно отправлена!**\n"
-            f"Статус: 🆕 Новая\n"
-            f"⏰ Время: {current_time} (Владивосток)\n\n"
-            "Мы свяжемся с вами в ближайшее время.\n"
-            "Статус заявки можно посмотреть в 'Мои заявки'.",
-            parse_mode='Markdown',
-            reply_markup=markup
-        )
-        
-    except Exception as e:
-        bot.send_message(
-            user_id,
-            f"❌ Ошибка при отправке заявки.\nПопробуйте позже."
-        )
-        print(f"Error: {e}")
-    
-    if user_id in user_data:
-        del user_data[user_id]
-
-@bot.callback_query_handler(func=lambda call: True)
-def callback_handler(call):
-    data = call.data.split('_')
-    
-    if data[0] == 'status':
-        ticket_id = int(data[1])
-        status = data[2]
-        
-        update_ticket_status(ticket_id, status)
-        
-        ticket = get_ticket_info(ticket_id)
-        if ticket:
-            user_id = ticket[1]
-            name = ticket[2]
+            const windowNum = document.getElementById('window_number').value;
             
-            status_emoji = {
-                'Новая': '🆕',
-                'В работе': '🔄',
-                'Принята': '✅',
-                'Отклонена': '❌',
-                'Завершена': '🎉'
-            }.get(status, '📌')
+            // Получаем данные по окну
+            const windowInfo = windowData[windowNum] || { mfu: 'Неизвестно', pc: 'Неизвестно' };
+
+            const data = {
+                branch: '№3',
+                full_name: document.getElementById('full_name').value.trim(),
+                window_number: windowNum,
+                mfu: windowInfo.mfu,
+                pc_name: windowInfo.pc,
+                description: document.getElementById('description').value.trim(),
+                urgent: document.getElementById('urgent').checked
+            };
+
+            // Проверка обязательных полей
+            if (!data.full_name || !data.window_number || !data.description) {
+                msgDiv.className = 'error';
+                msgDiv.textContent = '❌ Заполните все обязательные поля!';
+                msgDiv.style.display = 'block';
+                return;
+            }
+
+            try {
+                const res = await fetch('/submit_ticket', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                const result = await res.json();
+                if (res.ok) {
+                    msgDiv.className = 'success';
+                    msgDiv.textContent = '✅ Заявка успешно отправлена!';
+                    msgDiv.style.display = 'block';
+                    document.getElementById('ticketForm').reset();
+                    document.getElementById('mfu_display').textContent = 'Выберите окно';
+                    document.getElementById('pc_display').textContent = 'Выберите окно';
+                } else {
+                    throw new Error(result.message || 'Ошибка сервера');
+                }
+            } catch (err) {
+                msgDiv.className = 'error';
+                msgDiv.textContent = '❌ ' + err.message;
+                msgDiv.style.display = 'block';
+            }
+        });
+    </script>
+</body>
+</html>
+"""
+
+# Панель мониторинга с SSE (обновлена для отображения информации об окне)
+ADMIN_PANEL = """
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Панель IT-специалиста</title>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; background: #f1f3f5; padding: 20px; }
+        h1 { color: #212529; display: flex; align-items: center; gap: 10px; }
+        .controls { margin-bottom: 20px; display: flex; gap: 10px; flex-wrap: wrap; }
+        button { padding: 10px 18px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 14px; transition: opacity 0.2s; }
+        button:hover { opacity: 0.85; }
+        .btn-clear { background: #dc3545; color: white; }
+        .btn-refresh { background: #007bff; color: white; }
+        .btn-sound { background: #6c757d; color: white; }
+        .ticket { background: white; padding: 16px; margin-bottom: 12px; border-radius: 8px; box-shadow: 0 2px 6px rgba(0,0,0,0.08); border-left: 5px solid #007bff; transition: transform 0.1s; animation: slideIn 0.3s ease-out; }
+        .ticket:hover { transform: translateX(3px); }
+        .ticket.urgent { border-left-color: #dc3545; background: #fff5f5; animation: pulse 2s infinite, slideIn 0.3s ease-out; }
+        @keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(220,53,69,0.4); } 50% { box-shadow: 0 0 0 8px rgba(220,53,69,0); } }
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateY(-20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .ticket-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 6px; flex-wrap: wrap; gap: 8px; }
+        .ticket-header strong { font-size: 1.1em; }
+        .badge { padding: 3px 10px; border-radius: 12px; font-size: 0.8em; font-weight: bold; white-space: nowrap; }
+        .badge-urgent { background: #dc3545; color: white; }
+        .badge-normal { background: #e9ecef; color: #495057; }
+        .meta { color: #868e96; font-size: 0.85em; margin-top: 5px; display: flex; gap: 15px; flex-wrap: wrap; }
+        .meta-info { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 5px; }
+        .meta-info span { background: #f8f9fa; padding: 2px 10px; border-radius: 4px; font-size: 0.85em; }
+        .mfu-badge { color: #28a745; font-weight: 600; }
+        .pc-badge { color: #17a2b8; font-weight: 600; }
+        .desc { color: #343a40; margin-top: 8px; white-space: pre-wrap; background: #f8f9fa; padding: 10px; border-radius: 6px; font-size: 0.95em; }
+        .time { color: #adb5bd; font-size: 0.8em; margin-top: 8px; }
+        .empty { text-align: center; color: #adb5bd; padding: 40px; font-size: 1.1em; }
+        .counter { background: #007bff; color: white; padding: 3px 12px; border-radius: 15px; font-size: 0.85em; }
+        .toast { position: fixed; top: 20px; right: 20px; background: #28a745; color: white; padding: 15px 25px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.2); animation: slideInRight 0.5s ease-out; z-index: 1000; }
+        @keyframes slideInRight {
+            from { opacity: 0; transform: translateX(100px); }
+            to { opacity: 1; transform: translateX(0); }
+        }
+    </style>
+</head>
+<body>
+    <h1>🖥️ Поступившие заявки <span class="counter" id="counter">0</span></h1>
+    <div class="controls">
+        <button class="btn-refresh" onclick="location.reload()">🔄 Обновить</button>
+        <button class="btn-clear" onclick="clearTickets()">🗑️ Очистить всё</button>
+    </div>
+    <div id="tickets-container">
+        <div class="empty">⏳ Загрузка заявок...</div>
+    </div>
+
+    <script>
+        let tickets = [];
+        
+        // Функция для отображения заявок
+        function renderTickets() {
+            const container = document.getElementById('tickets-container');
+            const counter = document.getElementById('counter');
             
-            # Отправляем уведомление пользователю
-            try:
-                if status == 'Завершена':
-                    extra_msg = "\n🎉 Заявка выполнена! Спасибо за обращение."
-                elif status == 'Отклонена':
-                    extra_msg = "\n❌ Заявка отклонена. Если есть вопросы, обратитесь к администратору."
-                elif status == 'Принята':
-                    extra_msg = "\n✅ Заявка принята в работу."
-                elif status == 'В работе':
-                    extra_msg = "\n🔄 Начата работа над заявкой."
-                else:
-                    extra_msg = ""
+            counter.textContent = tickets.length;
+            
+            if (tickets.length === 0) {
+                container.innerHTML = '<div class="empty">✨ Заявок пока нет. Ждём...</div>';
+                return;
+            }
+            
+            // Показываем в обратном порядке (сначала новые)
+            const reversed = [...tickets].reverse();
+            
+            container.innerHTML = reversed.map(ticket => `
+                <div class="ticket ${ticket.urgent ? 'urgent' : ''}">
+                    <div class="ticket-header">
+                        <strong>👤 ${ticket.full_name}</strong>
+                        ${ticket.urgent ? '<span class="badge badge-urgent">⚠️ СРОЧНО</span>' : '<span class="badge badge-normal">Обычная</span>'}
+                    </div>
+                    <div class="meta">
+                        <span>🏢 ${ticket.branch}</span>
+                        <span>🪟 Окно №${ticket.window_number}</span>
+                    </div>
+                    <div class="meta-info">
+                        <span class="mfu-badge">📄 МФУ: ${ticket.mfu || 'Не указано'}</span>
+                        <span class="pc-badge">💻 ПК: ${ticket.pc_name || 'Не указано'}</span>
+                    </div>
+                    <div class="desc">${ticket.description}</div>
+                    <div class="time">🕒 ${ticket.time}</div>
+                </div>
+            `).join('');
+        }
+        
+        // Подключение к SSE
+        function connectSSE() {
+            const eventSource = new EventSource('/stream');
+            
+            eventSource.onmessage = function(event) {
+                const data = JSON.parse(event.data);
                 
-                bot.send_message(
-                    user_id,
-                    f"📢 **Обновление статуса заявки #{ticket_id}**\n"
-                    f"━━━━━━━━━━━━━━━━━━━\n"
-                    f"👤 Заявитель: {name}\n"
-                    f"📌 Новый статус: {status_emoji} {status}{extra_msg}\n"
-                    f"⏰ {get_current_time()} (Владивосток)\n\n"
-                    f"Нажмите '📋 Мои заявки' для просмотра всех заявок.",
-                    parse_mode='Markdown'
-                )
-            except Exception as e:
-                print(f"Не удалось уведомить пользователя: {e}")
+                if (data.type === 'init') {
+                    // Начальная загрузка всех заявок
+                    tickets = data.tickets;
+                    renderTickets();
+                } else if (data.type === 'new_ticket') {
+                    // Новая заявка
+                    tickets.push(data.ticket);
+                    renderTickets();
+                    
+                    // Показываем уведомление
+                    showNotification(data.ticket);
+                    
+                    // Звуковой сигнал (если поддерживается)
+                    playSound();
+                } else if (data.type === 'clear') {
+                    // Очистка
+                    tickets = [];
+                    renderTickets();
+                }
+            };
             
-            bot.answer_callback_query(call.id, f"Статус изменён на '{status}'")
-            
-            # Обновляем кнопки
-            new_markup = types.InlineKeyboardMarkup(row_width=3)
-            statuses = [
-                ('✅ Принята', 'Принята'),
-                ('🔄 В работе', 'В работе'),
-                ('🎉 Завершена', 'Завершена'),
-                ('❌ Отклонена', 'Отклонена')
-            ]
-            
-            if status != 'Завершена':
-                for label, s in statuses:
-                    if s == status:
-                        new_markup.add(types.InlineKeyboardButton(
-                            f'✅ {status}', 
-                            callback_data='info'
-                        ))
-                    else:
-                        new_markup.add(types.InlineKeyboardButton(
-                            label, 
-                            callback_data=f'status_{ticket_id}_{s}'
-                        ))
-                new_markup.add(types.InlineKeyboardButton('📝 Ответить', callback_data=f'reply_{ticket_id}'))
-            else:
-                new_markup.add(types.InlineKeyboardButton(
-                    '🎉 Завершена', 
-                    callback_data='info'
-                ))
-                new_markup.add(types.InlineKeyboardButton('📝 Ответить', callback_data=f'reply_{ticket_id}'))
-            
-            try:
-                bot.edit_message_reply_markup(
-                    call.message.chat.id,
-                    call.message.message_id,
-                    reply_markup=new_markup
-                )
-            except:
-                pass
-    
-    elif data[0] == 'reply':
-        ticket_id = int(data[1])
-        msg = bot.send_message(
-            call.message.chat.id,
-            f"📝 Введите комментарий для заявки #{ticket_id}:"
-        )
-        bot.register_next_step_handler(msg, process_admin_reply, ticket_id)
-        bot.answer_callback_query(call.id, "Введите ваш ответ")
-
-def process_admin_reply(message, ticket_id):
-    admin_comment = message.text
-    ticket = get_ticket_info(ticket_id)
-    
-    if ticket:
-        user_id = ticket[1]
-        name = ticket[2]
+            eventSource.onerror = function() {
+                // Переподключение через 3 секунды
+                setTimeout(connectSSE, 3000);
+            };
+        }
         
-        update_ticket_status(ticket_id, 'Принята', admin_comment)
-        
-        try:
-            bot.send_message(
-                user_id,
-                f"💬 **Ответ по заявке #{ticket_id}**\n"
-                f"━━━━━━━━━━━━━━━━━━━\n"
-                f"👤 Заявитель: {name}\n"
-                f"📌 Ответ администратора:\n{admin_comment}\n"
-                f"⏰ {get_current_time()} (Владивосток)\n\n"
-                f"Нажмите '📋 Мои заявки' для просмотра всех заявок.",
-                parse_mode='Markdown'
-            )
+        // Уведомление
+        function showNotification(ticket) {
+            const toast = document.createElement('div');
+            toast.className = 'toast';
+            toast.textContent = `🔔 Новая заявка от ${ticket.full_name} (Окно ${ticket.window_number})${ticket.urgent ? ' ⚠️ СРОЧНО!' : ''}`;
+            document.body.appendChild(toast);
             
-            bot.send_message(
-                message.chat.id,
-                f"✅ Ответ отправлен пользователю по заявке #{ticket_id}"
-            )
-        except Exception as e:
-            bot.send_message(
-                message.chat.id,
-                f"❌ Не удалось отправить ответ пользователю. Ошибка: {e}"
-            )
+            setTimeout(() => {
+                toast.style.opacity = '0';
+                toast.style.transition = 'opacity 0.5s';
+                setTimeout(() => toast.remove(), 500);
+            }, 5000);
+        }
+        
+        // Звук
+        function playSound() {
+            try {
+                const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                const oscillator = audioCtx.createOscillator();
+                const gainNode = audioCtx.createGain();
+                oscillator.connect(gainNode);
+                gainNode.connect(audioCtx.destination);
+                oscillator.frequency.value = 800;
+                oscillator.type = 'sine';
+                gainNode.gain.setValueAtTime(0.3, audioCtx.currentTime);
+                oscillator.start();
+                oscillator.stop(audioCtx.currentTime + 0.2);
+            } catch(e) {
+                // Если звук не поддерживается, игнорируем
+            }
+        }
+        
+        // Очистка заявок
+        async function clearTickets() {
+            if (confirm('Удалить ВСЕ заявки?')) {
+                await fetch('/clear', { method: 'POST' });
+                // SSE автоматически обновит список
+            }
+        }
+        
+        // Запускаем SSE
+        connectSSE();
+    </script>
+</body>
+</html>
+"""
 
-@bot.message_handler(commands=['stats'])
-def show_stats(message):
-    # Проверяем что это админ
-    if str(message.from_user.id) != str(ADMIN_CHAT_ID) and message.from_user.username != 'o51um':
-        bot.reply_to(message, "⛔ Доступ запрещён")
-        return
+# ================== SSE (Server-Sent Events) ==================
+@app.route('/stream')
+def stream():
+    def event_stream():
+        # Отправляем текущие заявки при подключении
+        yield f"data: {json.dumps({'type': 'init', 'tickets': tickets})}\n\n"
+        
+        # Ждем новые события
+        last_id = len(tickets)
+        while True:
+            # Проверяем, есть ли новые заявки
+            if len(tickets) > last_id:
+                new_ticket = tickets[-1]
+                yield f"data: {json.dumps({'type': 'new_ticket', 'ticket': new_ticket})}\n\n"
+                last_id = len(tickets)
+            time.sleep(0.5)  # Проверяем каждые 0.5 секунды
     
-    conn = sqlite3.connect('tickets.db')
-    cursor = conn.cursor()
-    
-    cursor.execute('SELECT COUNT(*) FROM tickets')
-    total = cursor.fetchone()[0]
-    
-    cursor.execute('SELECT status, COUNT(*) FROM tickets GROUP BY status')
-    stats = cursor.fetchall()
-    
-    conn.close()
-    
-    response = f"📊 **Статистика заявок**\n━━━━━━━━━━━━━━━━━━━\n"
-    response += f"📋 Всего: {total}\n"
-    response += f"⏰ {get_current_time()} (Владивосток)\n\n"
-    
-    status_order = ['Новая', 'В работе', 'Принята', 'Завершена', 'Отклонена']
-    status_emoji = {
-        'Новая': '🆕',
-        'В работе': '🔄',
-        'Принята': '✅',
-        'Завершена': '🎉',
-        'Отклонена': '❌'
-    }
-    
-    for status in status_order:
-        count = next((s[1] for s in stats if s[0] == status), 0)
-        emoji = status_emoji.get(status, '📌')
-        response += f"{emoji} {status}: {count}\n"
-    
-    bot.reply_to(message, response, parse_mode='Markdown')
+    return Response(event_stream(), mimetype="text/event-stream")
 
-@bot.message_handler(func=lambda message: True)
-def echo_all(message):
-    if message.chat.type == 'private':
-        bot.reply_to(message, 
-            "🤖 Нажми /start чтобы начать."
-        )
+# ================== МАРШРУТЫ ==================
+@app.route('/')
+def client_form():
+    return render_template_string(CLIENT_FORM)
 
-if __name__ == "__main__":
-    init_db()
-    print("🤖 Бот запущен и готов к работе!")
-    print(f"📨 Заявки будут отправляться в: {ADMIN_CHAT_ID}")
-    print(f"⏰ Временная зона: Владивосток (UTC+10)")
-    print(f"🕐 Текущее время: {get_current_time()}")
-    print("\n📌 Команды:")
-    print("   /start - Главное меню")
-    print("   /stats - Статистика (только для админа)")
-    bot.polling(none_stop=True)
+@app.route('/admin')
+def admin_panel():
+    return render_template_string(ADMIN_PANEL)
+
+@app.route('/submit_ticket', methods=['POST'])
+def submit_ticket():
+    data = request.get_json()
+    
+    # Проверка обязательных полей
+    required = ['branch', 'full_name', 'window_number', 'description']
+    for field in required:
+        if not data or not data.get(field):
+            return jsonify({"status": "error", "message": f"Поле '{field}' обязательно!"}), 400
+    
+    # Добавляем время
+    data['time'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    # Добавляем данные по МФУ и ПК, если их нет
+    if 'mfu' not in data:
+        data['mfu'] = 'Не указано'
+    if 'pc_name' not in data:
+        data['pc_name'] = 'Не указано'
+    
+    tickets.append(data)
+    
+    print(f"🔥 НОВАЯ ЗАЯВКА | {data['full_name']} | Окно {data['window_number']} | {data['branch']}")
+    print(f"   МФУ: {data['mfu']} | ПК: {data['pc_name']}")
+    print(f"   Поломка: {data['description'][:60]}...")
+    return jsonify({"status": "ok", "message": "Заявка принята!"}), 200
+
+@app.route('/clear', methods=['POST'])
+def clear():
+    count = len(tickets)
+    tickets.clear()
+    print(f"🗑️ Очищено {count} заявок")
+    return jsonify({"status": "ok"}), 200
+
+if __name__ == '__main__':
+    local_ip = "172.17.6.52"
+    
+    print("=" * 60)
+    print("🖥️  СЕРВЕР ЗАЯВОК ЗАПУЩЕН")
+    print("=" * 60)
+    print(f"📋 Панель мониторинга (для вас): http://127.0.0.1:8080/admin")
+    print(f"📝 Форма для клиентов:          http://{local_ip}:8080/")
+    print(f"🌐 Разошлите клиентам ссылку:   http://{local_ip}:8080/")
+    print("=" * 60)
+    print("✨ Заявки теперь отображаются МГНОВЕННО!")
+    print("=" * 60)
+    
+    threading.Timer(1.5, lambda: webbrowser.open("http://127.0.0.1:8080/admin")).start()
+    app.run(host='0.0.0.0', port=8080, debug=True, threaded=True)
