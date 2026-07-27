@@ -6,12 +6,12 @@ import socket
 import json
 import time
 
+
 app = Flask(__name__)
 tickets = []
 clients = []  # Список подключенных клиентов SSE
 
-# ================== HTML ШАБЛОНЫ ==================
-# Форма для клиентов (с отслеживанием статуса)
+# Форма для клиентов
 CLIENT_FORM = """
 <!DOCTYPE html>
 <html lang="ru">
@@ -174,28 +174,28 @@ CLIENT_FORM = """
     </div>
 
     <script>
-        // Данные по окнам
+        // Данные по окнам (МФУ и имя компьютера)
         const windowData = {
-            1: { mfu: "Kyocera M2040dn", pc: "PC-01" },
-            2: { mfu: "HP LaserJet M404", pc: "PC-02" },
-            3: { mfu: "Xerox WorkCentre 6515", pc: "PC-03" },
-            4: { mfu: "Canon i-SENSYS MF743Cdw", pc: "PC-04" },
-            5: { mfu: "Brother MFC-L5750DW", pc: "PC-05" },
-            6: { mfu: "Kyocera M2040dn", pc: "PC-06" },
-            7: { mfu: "HP LaserJet M404", pc: "PC-07" },
-            8: { mfu: "Xerox WorkCentre 6515", pc: "PC-08" },
-            9: { mfu: "Canon i-SENSYS MF743Cdw", pc: "PC-09" },
-            10: { mfu: "Brother MFC-L5750DW", pc: "PC-10" },
-            11: { mfu: "Kyocera M2040dn", pc: "PC-11" },
-            12: { mfu: "HP LaserJet M404", pc: "PC-12" },
-            13: { mfu: "Xerox WorkCentre 6515", pc: "PC-13" },
-            14: { mfu: "Canon i-SENSYS MF743Cdw", pc: "PC-14" },
-            15: { mfu: "Brother MFC-L5750DW", pc: "PC-15" },
-            16: { mfu: "Kyocera M2040dn", pc: "PC-16" },
-            17: { mfu: "HP LaserJet M404", pc: "PC-17" },
-            18: { mfu: "Xerox WorkCentre 6515", pc: "PC-18" },
-            19: { mfu: "Canon i-SENSYS MF743Cdw", pc: "PC-19" },
-            20: { mfu: "Brother MFC-L5750DW", pc: "PC-20" }
+            1: { mfu: "", pc: "" },
+            2: { mfu: "", pc: "" },
+            3: { mfu: "", pc: "" },
+            4: { mfu: "", pc: "" },
+            5: { mfu: "", pc: "" },
+            6: { mfu: "", pc: "" },
+            7: { mfu: "", pc: "" },
+            8: { mfu: "", pc: "" },
+            9: { mfu: "", pc: "" },
+            10: { mfu: "", pc: "" },
+            11: { mfu: "", pc: "" },
+            12: { mfu: "", pc: "" },
+            13: { mfu: "", pc: "" },
+            14: { mfu: "", pc: "" },
+            15: { mfu: "", pc: "" },
+            16: { mfu: "", pc: "" },
+            17: { mfu: "", pc: "" },
+            18: { mfu: "", pc: "" },
+            19: { mfu: "", pc: "" },
+            20: { mfu: "", pc: "" }
         };
 
         // Переключение вкладок
@@ -817,7 +817,7 @@ def clear():
     return jsonify({"status": "ok"}), 200
 
 if __name__ == '__main__':
-    local_ip = "172.17.6.52"
+    local_ip = "серверный айпи"
     
     print("=" * 60)
     print("🖥️  СЕРВЕР ЗАЯВОК ЗАПУЩЕН")
