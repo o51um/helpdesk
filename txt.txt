@@ -1,1 +1,897 @@
-Разработанное приложение обеспечивает бесперебойность предоставления услуг населению за счет сокращения времени решения технических проблем с 30-60 минут до 10-20 минут. В соответствии с Федеральным законом № 210-ФЗ это напрямую влияет на качество обслуживания граждан и сокращение времени ожидания в очереди. В рамках Указов Президента № 204 и № 474 приложение способствует цифровизации государственного управления и повышению его эффективности. В соответствии со Стратегией цифровой трансформации Хабаровского края и региональным проектом «Цифровое государственное управление» приложение обеспечивает цифровизацию внутренних процессов МФЦ, повышение производительности труда специалистов на 30 процентов и создание условий для дальнейшей автоматизации технической поддержки.
+from flask import Flask, render_template_string, request, jsonify
+import subprocess
+import threading
+import time
+import webbrowser
+import json
+import os
+from datetime import datetime
+
+app = Flask(__name__)
+
+# ================ КОНФИГУРАЦИЯ ================
+LOCAL_IP = "172.17.6.52"
+COMPUTER_PREFIX = "WS00301"
+COMPUTER_COUNT = 20
+
+# Файл для хранения пользователей
+USERS_FILE = "users.json"
+
+# ================ ХРАНИЛИЩЕ ================
+call_log = []
+computer_users = {}  # {pc_name: username}
+
+# ================ ЗАГРУЗКА/СОХРАНЕНИЕ ПОЛЬЗОВАТЕЛЕЙ ================
+def load_users():
+    """Загружает пользователей из файла"""
+    global computer_users
+    try:
+        with open(USERS_FILE, 'r', encoding='utf-8') as f:
+            computer_users = json.load(f)
+    except FileNotFoundError:
+        computer_users = {}
+    except:
+        computer_users = {}
+
+def save_users():
+    """Сохраняет пользователей в файл"""
+    try:
+        with open(USERS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(computer_users, f, ensure_ascii=False, indent=2)
+    except:
+        pass
+
+# Загружаем пользователей при старте
+load_users()
+
+# ================ ФУНКЦИЯ ПОЛУЧЕНИЯ АКТИВНОГО ПОЛЬЗОВАТЕЛЯ ================
+def get_active_user(pc_name):
+    """
+    Получает имя активного пользователя на компьютере через quser
+    Возвращает: (username, session_id) или (None, None)
+    """
+    try:
+        # Команда для получения активных сессий
+        command = f'quser /server:{pc_name}'
+        result = subprocess.run(
+            command,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=3
+        )
+        
+        if result.returncode != 0:
+            return None, None
+        
+        # Парсим вывод quser
+        lines = result.stdout.strip().split('\n')
+        if len(lines) < 2:
+            return None, None
+        
+        # Пропускаем заголовок
+        for line in lines[1:]:
+            parts = line.split()
+            if len(parts) >= 2:
+                username = parts[0]
+                # Проверяем, что сессия активна (не Disconnected)
+                if 'Disc' not in line and 'Выход' not in line:
+                    return username, None
+        
+        return None, None
+        
+    except subprocess.TimeoutExpired:
+        return None, None
+    except Exception:
+        return None, None
+
+def update_all_users():
+    """Обновляет информацию о пользователях на всех компьютерах"""
+    global computer_users
+    
+    # Создаем список всех ПК
+    all_pcs = [f"{COMPUTER_PREFIX}{i:02d}" for i in range(1, COMPUTER_COUNT + 1)]
+    
+    for pc in all_pcs:
+        username, _ = get_active_user(pc)
+        if username:
+            computer_users[pc] = username
+        else:
+            # Если пользователь не найден, проверяем не залогинен ли он через другой метод
+            # Или просто оставляем предыдущее значение с пометкой "неактивен"
+            if pc in computer_users:
+                # Проверяем, не устарела ли запись
+                pass
+    
+    save_users()
+
+def get_whoami(pc_name):
+    """Альтернативный метод получения пользователя"""
+    try:
+        command = f'wmic /node:{pc_name} computersystem get username'
+        result = subprocess.run(
+            command,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=3
+        )
+        if result.returncode == 0:
+            lines = result.stdout.strip().split('\n')
+            for line in lines[1:]:
+                line = line.strip()
+                if line and '\\' in line:
+                    return line.split('\\')[-1]
+    except:
+        pass
+    return None
+
+# ================ HTML СТРАНИЦЫ ================
+
+# 1. КЛИЕНТСКАЯ ФОРМА (ВЫБОР ОКНА + ТЕКСТ + ПОЛЬЗОВАТЕЛИ)
+CLIENT_PAGE = """
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>📢 Вызов специалиста</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        .container {
+            background: white;
+            border-radius: 25px;
+            padding: 40px;
+            max-width: 650px;
+            width: 100%;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            text-align: center;
+        }
+        h1 {
+            font-size: 28px;
+            color: #333;
+            margin-bottom: 5px;
+        }
+        .subtitle {
+            color: #888;
+            font-size: 14px;
+            margin-bottom: 25px;
+        }
+        .computer-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 10px;
+            margin: 20px 0;
+        }
+        .computer-btn {
+            padding: 12px 0;
+            border: 2px solid #e0e0e0;
+            border-radius: 12px;
+            background: white;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            color: #333;
+            transition: all 0.3s;
+            position: relative;
+            min-height: 70px;
+        }
+        .computer-btn:hover {
+            border-color: #667eea;
+            background: #f0f2ff;
+            transform: translateY(-2px);
+        }
+        .computer-btn.active {
+            border-color: #667eea;
+            background: #667eea;
+            color: white;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+        }
+        .computer-btn .number {
+            font-size: 20px;
+            display: block;
+        }
+        .computer-btn .pc-name {
+            font-size: 10px;
+            opacity: 0.7;
+            display: block;
+            margin-top: 2px;
+        }
+        .computer-btn .user-name {
+            font-size: 11px;
+            display: block;
+            margin-top: 4px;
+            background: #e8f5e9;
+            color: #2e7d32;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-weight: 600;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .computer-btn.active .user-name {
+            background: rgba(255,255,255,0.2);
+            color: white;
+        }
+        .computer-btn .no-user {
+            font-size: 10px;
+            display: block;
+            margin-top: 4px;
+            color: #999;
+        }
+        .computer-btn.active .no-user {
+            color: rgba(255,255,255,0.7);
+        }
+        .computer-btn .status-dot {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-right: 4px;
+        }
+        .computer-btn .status-dot.online {
+            background: #4CAF50;
+        }
+        .computer-btn .status-dot.offline {
+            background: #f44336;
+        }
+        .computer-btn.active .status-dot.online {
+            background: #a5d6a7;
+        }
+        .computer-btn.active .status-dot.offline {
+            background: #ef9a9a;
+        }
+        
+        .last-update {
+            font-size: 12px;
+            color: #999;
+            margin: 10px 0;
+        }
+        
+        .message-area {
+            margin: 15px 0;
+            text-align: left;
+        }
+        .message-area label {
+            display: block;
+            font-weight: 600;
+            color: #555;
+            margin-bottom: 5px;
+            font-size: 14px;
+        }
+        .message-area textarea {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 12px;
+            font-size: 15px;
+            font-family: inherit;
+            resize: vertical;
+            min-height: 60px;
+            max-height: 120px;
+            transition: border-color 0.3s;
+        }
+        .message-area textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        .message-area .char-count {
+            text-align: right;
+            font-size: 12px;
+            color: #999;
+            margin-top: 3px;
+        }
+        
+        .selected-display {
+            padding: 12px;
+            background: #f0f2ff;
+            border-radius: 10px;
+            margin: 15px 0;
+            font-size: 16px;
+            color: #555;
+        }
+        .selected-display strong {
+            color: #667eea;
+            font-size: 20px;
+        }
+        .selected-display .selected-user {
+            color: #2e7d32;
+            font-weight: 600;
+        }
+        
+        .call-btn {
+            width: 100%;
+            padding: 18px;
+            background: linear-gradient(135deg, #ff6b6b 0%, #ee5a24 100%);
+            color: white;
+            border: none;
+            border-radius: 15px;
+            font-size: 22px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.3s;
+            margin-top: 10px;
+        }
+        .call-btn:hover:not(:disabled) {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 25px rgba(238, 90, 36, 0.5);
+        }
+        .call-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .refresh-btn {
+            margin-top: 10px;
+            padding: 8px 20px;
+            background: #6c757d;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background 0.3s;
+        }
+        .refresh-btn:hover {
+            background: #5a6268;
+        }
+        
+        #status {
+            margin-top: 15px;
+            padding: 12px;
+            border-radius: 10px;
+            font-weight: 600;
+            display: none;
+        }
+        #status.success {
+            display: block;
+            background: #d4edda;
+            color: #155724;
+        }
+        #status.error {
+            display: block;
+            background: #f8d7da;
+            color: #721c24;
+        }
+        
+        .loading {
+            opacity: 0.5;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📢 Вызов в обработку</h1>
+        <div class="subtitle">Выберите окно, напишите сообщение и нажмите "Позвать"</div>
+        
+        <div class="last-update">
+            🟢 Обновлено: <span id="updateTime">{{ update_time }}</span>
+            <button class="refresh-btn" onclick="refreshUsers()">🔄 Обновить</button>
+        </div>
+        
+        <div class="computer-grid" id="computerGrid">
+            {% for i in range(1, 21) %}
+            {% set pc_name = prefix + "%02d"|format(i) %}
+            {% set user = users.get(pc_name, None) %}
+            <button class="computer-btn" onclick="selectPC({{ i }})" id="pc_{{ i }}">
+                <span class="number">{{ "%02d"|format(i) }}</span>
+                <span class="pc-name">{{ pc_name }}</span>
+                {% if user %}
+                <span class="user-name">👤 {{ user }}</span>
+                {% else %}
+                <span class="no-user">⚪ свободен</span>
+                {% endif %}
+            </button>
+            {% endfor %}
+        </div>
+        
+        <div class="message-area">
+            <label for="messageInput">💬 Сообщение для специалиста:</label>
+            <textarea id="messageInput" placeholder="Например: Срочно подойдите, проблема с печатью..." maxlength="200"></textarea>
+            <div class="char-count"><span id="charCount">0</span>/200</div>
+        </div>
+        
+        <div class="selected-display">
+            Выбрано: <strong id="selectedDisplay">не выбрано</strong>
+            <span id="selectedUser"></span>
+        </div>
+        
+        <button class="call-btn" id="callBtn" onclick="makeCall()" disabled>
+            🔔 ПОЗВАТЬ
+        </button>
+        
+        <div id="status"></div>
+    </div>
+
+    <script>
+        let selectedPC = null;
+        let selectedUser = null;
+        
+        // Счетчик символов
+        document.getElementById('messageInput').addEventListener('input', function() {
+            document.getElementById('charCount').textContent = this.value.length;
+        });
+        
+        function selectPC(num) {
+            document.querySelectorAll('.computer-btn').forEach(btn => btn.classList.remove('active'));
+            const btn = document.getElementById('pc_' + num);
+            btn.classList.add('active');
+            selectedPC = num;
+            
+            // Получаем имя пользователя из кнопки
+            const userSpan = btn.querySelector('.user-name');
+            selectedUser = userSpan ? userSpan.textContent.replace('👤 ', '') : null;
+            
+            const pcName = '{{ prefix }}' + String(num).padStart(2, '0');
+            let displayText = pcName;
+            if (selectedUser) {
+                document.getElementById('selectedUser').textContent = '👤 ' + selectedUser;
+                document.getElementById('selectedUser').style.color = '#2e7d32';
+            } else {
+                document.getElementById('selectedUser').textContent = ' (свободен)';
+                document.getElementById('selectedUser').style.color = '#999';
+            }
+            document.getElementById('selectedDisplay').textContent = displayText;
+            document.getElementById('callBtn').disabled = false;
+            document.getElementById('status').style.display = 'none';
+        }
+        
+        function refreshUsers() {
+            const grid = document.getElementById('computerGrid');
+            grid.classList.add('loading');
+            
+            fetch('/api/refresh_users', {
+                method: 'POST'
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'ok') {
+                    // Обновляем время
+                    document.getElementById('updateTime').textContent = data.time;
+                    // Перезагружаем страницу для обновления данных
+                    location.reload();
+                }
+            })
+            .catch(() => {
+                grid.classList.remove('loading');
+            });
+        }
+        
+        function makeCall() {
+            if (!selectedPC) return;
+            
+            const callBtn = document.getElementById('callBtn');
+            const statusDiv = document.getElementById('status');
+            const message = document.getElementById('messageInput').value.trim();
+            
+            callBtn.disabled = true;
+            callBtn.textContent = '⏳ Отправка...';
+            
+            fetch('/api/call', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                    pc: selectedPC,
+                    message: message,
+                    user: selectedUser
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'ok') {
+                    statusDiv.className = 'success';
+                    statusDiv.textContent = '✅ ' + data.message;
+                    document.getElementById('messageInput').value = '';
+                    document.getElementById('charCount').textContent = '0';
+                } else {
+                    statusDiv.className = 'error';
+                    statusDiv.textContent = '❌ ' + data.message;
+                }
+                statusDiv.style.display = 'block';
+                
+                callBtn.disabled = false;
+                callBtn.textContent = '🔔 ПОЗВАТЬ';
+                
+                setTimeout(() => {
+                    statusDiv.style.display = 'none';
+                }, 5000);
+            })
+            .catch(() => {
+                statusDiv.className = 'error';
+                statusDiv.textContent = '❌ Ошибка соединения';
+                statusDiv.style.display = 'block';
+                callBtn.disabled = false;
+                callBtn.textContent = '🔔 ПОЗВАТЬ';
+            });
+        }
+    </script>
+</body>
+</html>
+"""
+
+# 2. АДМИН-ПАНЕЛЬ
+ADMIN_PAGE = """
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>👨‍💼 Админ-панель</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #f0f2f5;
+            padding: 20px;
+        }
+        .container { max-width: 1000px; margin: 0 auto; }
+        h1 { color: #333; margin-bottom: 20px; }
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        .stat-card {
+            background: white;
+            padding: 20px;
+            border-radius: 15px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            text-align: center;
+        }
+        .stat-card .number {
+            font-size: 32px;
+            font-weight: 700;
+            color: #667eea;
+        }
+        .stat-card .label {
+            color: #888;
+            font-size: 14px;
+        }
+        
+        .users-grid {
+            background: white;
+            padding: 20px;
+            border-radius: 15px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        .users-grid h2 {
+            font-size: 18px;
+            color: #333;
+            margin-bottom: 15px;
+        }
+        .user-list {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 10px;
+        }
+        .user-item {
+            padding: 10px 15px;
+            background: #f8f9fa;
+            border-radius: 10px;
+            border-left: 4px solid #4CAF50;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .user-item .pc {
+            font-weight: 600;
+            color: #667eea;
+        }
+        .user-item .user {
+            color: #333;
+        }
+        .user-item .empty {
+            color: #999;
+            font-style: italic;
+        }
+        .user-item .offline {
+            border-left-color: #f44336;
+        }
+        
+        .log {
+            background: white;
+            padding: 20px;
+            border-radius: 15px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .log h2 {
+            font-size: 18px;
+            color: #333;
+            margin-bottom: 15px;
+        }
+        .log .entry {
+            padding: 10px 0;
+            border-bottom: 1px solid #eee;
+            font-size: 14px;
+        }
+        .log .entry:last-child {
+            border-bottom: none;
+        }
+        .log .entry .time {
+            color: #999;
+            margin-right: 15px;
+        }
+        .log .entry .pc {
+            font-weight: 600;
+            color: #667eea;
+        }
+        .log .entry .user {
+            color: #2e7d32;
+            font-weight: 500;
+        }
+        .log .entry .status-ok { color: #28a745; font-weight: 600; }
+        .log .entry .status-err { color: #dc3545; font-weight: 600; }
+        .log .entry .msg-text {
+            display: block;
+            color: #555;
+            font-style: italic;
+            margin-top: 5px;
+            margin-left: 70px;
+            background: #f8f9fa;
+            padding: 5px 12px;
+            border-radius: 8px;
+            font-size: 13px;
+            border-left: 3px solid #667eea;
+        }
+        .log .empty {
+            color: #999;
+            text-align: center;
+            padding: 20px;
+        }
+        
+        .links {
+            display: flex;
+            gap: 15px;
+            margin-top: 20px;
+            flex-wrap: wrap;
+        }
+        .links a {
+            display: inline-block;
+            padding: 10px 25px;
+            background: #667eea;
+            color: white;
+            text-decoration: none;
+            border-radius: 10px;
+            font-weight: 600;
+            transition: background 0.3s;
+        }
+        .links a:hover {
+            background: #5a6fd6;
+        }
+        .links a.refresh-link {
+            background: #6c757d;
+        }
+        .links a.refresh-link:hover {
+            background: #5a6268;
+        }
+        
+        .update-info {
+            font-size: 13px;
+            color: #888;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>👨‍💼 Админ-панель</h1>
+        
+        <div class="stats">
+            <div class="stat-card">
+                <div class="number">{{ stats.total }}</div>
+                <div class="label">Всего вызовов</div>
+            </div>
+            <div class="stat-card">
+                <div class="number">{{ stats.success }}</div>
+                <div class="label">Успешных</div>
+            </div>
+            <div class="stat-card">
+                <div class="number">{{ stats.failed }}</div>
+                <div class="label">Ошибок</div>
+            </div>
+            <div class="stat-card">
+                <div class="number">{{ stats.online }}</div>
+                <div class="label">👤 Пользователей онлайн</div>
+            </div>
+        </div>
+        
+        <div class="users-grid">
+            <h2>👤 Кто за каким компьютером</h2>
+            <div class="user-list">
+                {% for pc, user in users.items() %}
+                <div class="user-item">
+                    <span class="pc">{{ pc }}</span>
+                    <span class="user">👤 {{ user }}</span>
+                </div>
+                {% else %}
+                <div class="user-item offline">
+                    <span class="pc">Нет данных</span>
+                    <span class="empty">⚪ никто не активен</span>
+                </div>
+                {% endfor %}
+            </div>
+            <div class="update-info">
+                🕐 Обновлено: {{ update_time }}
+                <a href="/admin" style="margin-left:15px; color:#667eea; text-decoration:none;">🔄 Обновить</a>
+            </div>
+        </div>
+        
+        <div class="log">
+            <h2>📋 История вызовов</h2>
+            {% if call_log %}
+                {% for entry in call_log[::-1] %}
+                <div class="entry">
+                    <span class="time">{{ entry.time }}</span>
+                    <span class="pc">{{ entry.pc }}</span>
+                    {% if entry.user %}
+                    <span class="user">({{ entry.user }})</span>
+                    {% endif %}
+                    — 
+                    <span class="{% if entry.status == 'ok' %}status-ok{% else %}status-err{% endif %}">
+                        {{ entry.message }}
+                    </span>
+                    {% if entry.text %}
+                    <span class="msg-text">💬 {{ entry.text }}</span>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            {% else %}
+                <div class="empty">📭 Вызовов пока нет</div>
+            {% endif %}
+        </div>
+        
+        <div class="links">
+            <a href="/client">📢 Форма вызова</a>
+            <a href="/admin" class="refresh-link">🔄 Обновить</a>
+            <a href="/api/refresh_users" class="refresh-link" target="_blank">🔄 Обновить пользователей</a>
+        </div>
+    </div>
+</body>
+</html>
+"""
+
+# ================ API ЭНДПОИНТЫ ================
+
+@app.route('/client')
+def client_page():
+    """Страница для вызова специалистов"""
+    # Обновляем пользователей при загрузке страницы
+    update_all_users()
+    return render_template_string(
+        CLIENT_PAGE, 
+        prefix=COMPUTER_PREFIX,
+        users=computer_users,
+        update_time=datetime.now().strftime('%H:%M:%S')
+    )
+
+@app.route('/admin')
+def admin_page():
+    """Админ-панель"""
+    # Обновляем пользователей
+    update_all_users()
+    
+    online_count = len(computer_users)
+    
+    stats = {
+        'total': len(call_log),
+        'success': sum(1 for c in call_log if c['status'] == 'ok'),
+        'failed': sum(1 for c in call_log if c['status'] == 'error'),
+        'online': online_count
+    }
+    
+    return render_template_string(
+        ADMIN_PAGE,
+        ip=LOCAL_IP,
+        prefix=COMPUTER_PREFIX,
+        users=computer_users,
+        call_log=call_log,
+        stats=stats,
+        update_time=datetime.now().strftime('%H:%M:%S')
+    )
+
+@app.route('/api/refresh_users', methods=['POST', 'GET'])
+def refresh_users():
+    """Обновляет список пользователей"""
+    update_all_users()
+    return jsonify({
+        'status': 'ok',
+        'users': computer_users,
+        'time': datetime.now().strftime('%H:%M:%S')
+    })
+
+@app.route('/api/call', methods=['POST'])
+def make_call():
+    """Вызов специалиста"""
+    data = request.json
+    pc_number = data.get('pc')
+    message_text = data.get('message', '').strip()
+    user_name = data.get('user', '')
+    
+    if not pc_number or pc_number < 1 or pc_number > COMPUTER_COUNT:
+        return jsonify({'status': 'error', 'message': f'Неверный номер (1-{COMPUTER_COUNT})'})
+    
+    pc_name = f"{COMPUTER_PREFIX}{pc_number:02d}"
+    return send_msg(pc_name, message_text, user_name)
+
+def send_msg(pc_name, message_text, user_name=''):
+    """Отправка сообщения через msg"""
+    # Формируем сообщение
+    if message_text and user_name:
+        full_message = f"ВНИМАНИЕ! Подойдите в обработку\n\nПользователь: {user_name}\nСообщение: {message_text}"
+    elif message_text:
+        full_message = f"ВНИМАНИЕ! Подойдите в обработку\n\nСообщение: {message_text}"
+    elif user_name:
+        full_message = f"ВНИМАНИЕ! Подойдите в обработку\n\nПользователь: {user_name}"
+    else:
+        full_message = "ВНИМАНИЕ! Подойдите в обработку"
+    
+    # Экранируем кавычки для cmd
+    full_message = full_message.replace('"', '\\"')
+    
+    command = f'msg * /server:{pc_name} "{full_message}"'
+    
+    try:
+        result = subprocess.run(
+            command,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        
+        if result.returncode == 0:
+            success = True
+            msg = f"Сообщение отправлено на {pc_name}"
+        else:
+            success = False
+            error = result.stderr.strip() or 'Неизвестная ошибка'
+            msg = f"Ошибка: {error}"
+            
+    except subprocess.TimeoutExpired:
+        success = False
+        msg = f"Таймаут: {pc_name} не отвечает"
+    except Exception as e:
+        success = False
+        msg = f"Ошибка: {str(e)}"
+    
+    # Логируем вызов
+    call_log.append({
+        'time': datetime.now().strftime('%H:%M:%S'),
+        'pc': pc_name,
+        'user': user_name if user_name else None,
+        'text': message_text if message_text else None,
+        'status': 'ok' if success else 'error',
+        'message': msg
+    })
+    
+    return jsonify({'status': 'ok' if success else 'error', 'message': msg})
+
+# ================ ЗАПУСК ================
+if __name__ == '__main__':
+    # Обновляем пользователей при старте
+    update_all_users()
+    
+    print("=" * 60)
+    print("🖥️  СИСТЕМА ВЫЗОВА СПЕЦИАЛИСТОВ")
+    print("=" * 60)
+    print(f"📢 Форма вызова:     http://{LOCAL_IP}:8080/client")
+    print(f"👨‍💼 Админ-панель:    http://127.0.0.1:8080/admin")
+    print("=" * 60)
+    print("👤 Теперь видно, кто сидит за каждым компьютером!")
+    print("   Пользователи обновляются автоматически")
+    print("=" * 60)
+    
+    threading.Timer(1.5, lambda: webbrowser.open("http://127.0.0.1:8080/admin")).start()
+    app.run(host='0.0.0.0', port=8080, debug=True, threaded=True)
