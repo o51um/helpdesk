@@ -13,7 +13,30 @@ COMPUTER_PREFIX = "WS00301"
 COMPUTER_COUNT = 20
 
 # ================ КОНФИГУРАЦИЯ ДЛЯ ШЕФА ================
+# Все компьютеры для шефа (101-120 + специальные)
 CHIEF_COMPUTERS = {
+    # Основные окна 101-120
+    "101": "Окно 101",
+    "102": "Окно 102",
+    "103": "Окно 103",
+    "104": "Окно 104",
+    "105": "Окно 105",
+    "106": "Окно 106",
+    "107": "Окно 107",
+    "108": "Окно 108",
+    "109": "Окно 109",
+    "110": "Окно 110",
+    "111": "Окно 111",
+    "112": "Окно 112",
+    "113": "Окно 113",
+    "114": "Окно 114",
+    "115": "Окно 115",
+    "116": "Окно 116",
+    "117": "Окно 117",
+    "118": "Окно 118",
+    "119": "Окно 119",
+    "120": "Окно 120",
+    # Специальные окна
     "204": "Ачина",
     "702": "Дзюба",
     "905": "Доброжанская",
@@ -590,7 +613,7 @@ ADMIN_PAGE = """
 </html>
 """
 
-# 3. ФОРМА ДЛЯ ШЕФА
+# 3. ФОРМА ДЛЯ ШЕФА (БЕЗ ССЫЛКИ НА АДМИНКУ)
 CHIEF_PAGE = """
 <!DOCTYPE html>
 <html>
@@ -612,7 +635,7 @@ CHIEF_PAGE = """
             background: white;
             border-radius: 25px;
             padding: 40px;
-            max-width: 950px;
+            max-width: 1100px;
             width: 100%;
             box-shadow: 0 20px 60px rgba(0,0,0,0.3);
             margin-top: 20px;
@@ -641,17 +664,17 @@ CHIEF_PAGE = """
         
         .computer-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
-            gap: 10px;
+            grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+            gap: 8px;
             margin: 15px 0;
         }
         .computer-btn {
-            padding: 12px 8px;
+            padding: 10px 6px;
             border: 2px solid #e0e0e0;
-            border-radius: 12px;
+            border-radius: 10px;
             background: white;
             cursor: pointer;
-            font-size: 13px;
+            font-size: 12px;
             font-weight: 600;
             color: #333;
             transition: all 0.3s;
@@ -669,15 +692,33 @@ CHIEF_PAGE = """
             box-shadow: 0 4px 15px rgba(245, 87, 108, 0.4);
         }
         .computer-btn .pc-name {
-            font-size: 14px;
+            font-size: 13px;
             display: block;
             font-weight: 700;
         }
         .computer-btn .user-name {
-            font-size: 10px;
+            font-size: 9px;
             display: block;
             opacity: 0.7;
-            margin-top: 3px;
+            margin-top: 2px;
+        }
+        .computer-btn.special {
+            border-color: #ffd700;
+            background: #fffde7;
+        }
+        .computer-btn.special.active {
+            background: #f5576c;
+            border-color: #f5576c;
+            color: white;
+        }
+        .computer-btn.admin {
+            border-color: #4facfe;
+            background: #e3f2fd;
+        }
+        .computer-btn.admin.active {
+            background: #f5576c;
+            border-color: #f5576c;
+            color: white;
         }
         
         .message-area {
@@ -849,6 +890,30 @@ CHIEF_PAGE = """
             font-size: 11px;
             margin-left: 5px;
         }
+        .legend {
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+            margin: 10px 0 0 0;
+            padding: 10px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            font-size: 12px;
+        }
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .legend-color {
+            width: 20px;
+            height: 20px;
+            border-radius: 4px;
+            border: 1px solid #ddd;
+        }
+        .legend-color.main { background: white; }
+        .legend-color.special { background: #fffde7; border-color: #ffd700; }
+        .legend-color.admin { background: #e3f2fd; border-color: #4facfe; }
     </style>
 </head>
 <body>
@@ -856,13 +921,38 @@ CHIEF_PAGE = """
         <h1>👔 Вызов специалистов</h1>
         <div class="subtitle">Выберите окна (можно несколько) или используйте групповую рассылку</div>
         
+        <div class="legend">
+            <span class="legend-item">
+                <span class="legend-color main"></span> Основные окна (101-120)
+            </span>
+            <span class="legend-item">
+                <span class="legend-color special"></span> Специальные окна
+            </span>
+            <span class="legend-item">
+                <span class="legend-color admin"></span> Админы (501-502)
+            </span>
+        </div>
+        
         <div class="section-title">📋 Список окон</div>
         <div class="computer-grid" id="computerGrid">
             {% for pc, user in computers.items() %}
-            <button class="computer-btn" onclick="togglePC('{{ pc }}')" id="pc_{{ pc }}">
-                <span class="pc-name">WS0030{{ pc }}</span>
-                <span class="user-name">{{ user }}</span>
-            </button>
+                {% set pc_num = pc|int %}
+                {% if pc_num >= 101 and pc_num <= 120 %}
+                    <button class="computer-btn" onclick="togglePC('{{ pc }}')" id="pc_{{ pc }}">
+                        <span class="pc-name">WS0030{{ pc }}</span>
+                        <span class="user-name">{{ user }}</span>
+                    </button>
+                {% elif pc_num >= 501 and pc_num <= 502 %}
+                    <button class="computer-btn admin" onclick="togglePC('{{ pc }}')" id="pc_{{ pc }}">
+                        <span class="pc-name">WS0030{{ pc }}</span>
+                        <span class="user-name">{{ user }}</span>
+                    </button>
+                {% else %}
+                    <button class="computer-btn special" onclick="togglePC('{{ pc }}')" id="pc_{{ pc }}">
+                        <span class="pc-name">WS0030{{ pc }}</span>
+                        <span class="user-name">{{ user }}</span>
+                    </button>
+                {% endif %}
             {% endfor %}
         </div>
         
@@ -901,7 +991,6 @@ CHIEF_PAGE = """
         
         <div class="nav-links">
             <a href="/client" class="client-link">📢 Форма вызова в обработку</a>
-            <a href="/admin">👨‍💼 Админ-панель</a>
         </div>
     </div>
 
@@ -1174,13 +1263,12 @@ if __name__ == '__main__':
     print(f"👔 Форма шефа:       http://{LOCAL_IP}:8080/chief")
     print(f"👨‍💼 Админ-панель:    http://127.0.0.1:8080/admin")
     print("=" * 60)
-    print("📌 Форма шефа:")
-    print("   - Выбор нескольких окон")
-    print("   - Только сообщение (без 'Внимание подойдите!')")
-    print("   - 3 группы рассылок:")
-    print("     1️⃣ 20 окон + 2 админа")
-    print("     2️⃣ 20 окон + 2 админа + 9 окон")
-    print("     3️⃣ 9 окон (без админов)")
+    print("📌 Форма шефа включает:")
+    print("   ✅ Все окна 101-120 (20 шт)")
+    print("   ✅ Специальные окна (201-209, 204, 702)")
+    print("   ✅ Админы (501-502)")
+    print("   ✅ 3 группы рассылок")
+    print("   ✅ НЕТ доступа к админ-панели")
     print("=" * 60)
     
     threading.Timer(1.5, lambda: webbrowser.open("http://127.0.0.1:8080/admin")).start()
