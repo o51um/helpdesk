@@ -5,6 +5,8 @@ import time
 import webbrowser
 from datetime import datetime
 import re
+import json
+import os
 
 app = Flask(__name__)
 
@@ -12,6 +14,9 @@ app = Flask(__name__)
 LOCAL_IP = "172.17.6.52"
 COMPUTER_PREFIX = "WS00301"
 COMPUTER_COUNT = 20
+
+# Файл для хранения рейтингов
+RANKING_FILE = "game_ranking.json"
 
 # ================ КОНФИГУРАЦИЯ ДЛЯ ШЕФА ================
 CHIEF_COMPUTERS = {
@@ -70,6 +75,40 @@ CHIEF_GROUPS = {
 # ================ ХРАНИЛИЩЕ ================
 call_log = []
 chief_call_log = []
+
+# ================ РЕЙТИНГИ ================
+def load_ranking():
+    """Загружает рейтинги из файла"""
+    try:
+        with open(RANKING_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return []
+    except:
+        return []
+
+def save_ranking(ranking):
+    """Сохраняет рейтинги в файл"""
+    try:
+        with open(RANKING_FILE, 'w', encoding='utf-8') as f:
+            json.dump(ranking, f, ensure_ascii=False, indent=2)
+    except:
+        pass
+
+def add_score(name, score):
+    """Добавляет результат в рейтинг"""
+    ranking = load_ranking()
+    ranking.append({
+        'name': name,
+        'score': score,
+        'date': datetime.now().strftime('%d.%m.%Y %H:%M')
+    })
+    # Сортируем по убыванию очков
+    ranking.sort(key=lambda x: x['score'], reverse=True)
+    # Оставляем только топ-50
+    ranking = ranking[:50]
+    save_ranking(ranking)
+    return ranking
 
 # ================ HTML СТРАНИЦЫ ================
 
@@ -496,6 +535,7 @@ ADMIN_PAGE = """
             gap: 5px;
             margin-bottom: 20px;
             border-bottom: 2px solid #e0e0e0;
+            flex-wrap: wrap;
         }
         .tab {
             padding: 10px 20px;
@@ -525,6 +565,7 @@ ADMIN_PAGE = """
         <div class="tabs">
             <button class="tab active" onclick="showTab('client')">📋 Вызовы в обработку</button>
             <button class="tab" onclick="showTab('chief')">👔 Вызовы шефа</button>
+            <button class="tab" onclick="showTab('ranking')">🏆 Рейтинг 2048</button>
         </div>
         
         <div id="client-tab" class="tab-content active">
@@ -603,6 +644,43 @@ ADMIN_PAGE = """
             </div>
         </div>
         
+        <div id="ranking-tab" class="tab-content">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                <h2>🏆 Рейтинг игроков 2048</h2>
+                <button onclick="clearRanking()" style="padding: 8px 20px; background: #dc3545; color: white; border: none; border-radius: 8px; cursor: pointer;">
+                    🗑️ Очистить рейтинг
+                </button>
+            </div>
+            <div id="rankingList">
+                {% if ranking %}
+                    <table style="width:100%; border-collapse: collapse;">
+                        <thead>
+                            <tr style="background: #f8f9fa;">
+                                <th style="padding: 10px; text-align: left;">#</th>
+                                <th style="padding: 10px; text-align: left;">Игрок</th>
+                                <th style="padding: 10px; text-align: right;">Очки</th>
+                                <th style="padding: 10px; text-align: right;">Дата</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for entry in ranking %}
+                            <tr style="border-bottom: 1px solid #eee;">
+                                <td style="padding: 10px; font-weight: 700; color: {% if loop.index == 1 %}gold{% elif loop.index == 2 %}silver{% elif loop.index == 3 %}bronze{% else %}#333{% endif %};">
+                                    {% if loop.index == 1 %}🥇{% elif loop.index == 2 %}🥈{% elif loop.index == 3 %}🥉{% else %}{{ loop.index }}{% endif %}
+                                </td>
+                                <td style="padding: 10px; font-weight: 600;">{{ entry.name }}</td>
+                                <td style="padding: 10px; text-align: right; font-weight: 700; color: #667eea;">{{ entry.score }}</td>
+                                <td style="padding: 10px; text-align: right; color: #999; font-size: 13px;">{{ entry.date }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                {% else %}
+                    <p style="text-align: center; color: #999; padding: 40px;">🏆 Пока нет рекордов. Станьте первым!</p>
+                {% endif %}
+            </div>
+        </div>
+        
         <div class="links">
             <a href="/client">📢 Форма вызова</a>
             <a href="/chief" style="background: #ff6b6b;">👔 Форма шефа</a>
@@ -618,6 +696,20 @@ ADMIN_PAGE = """
             
             document.querySelector(`.tab[onclick="showTab('${tab}')"]`).classList.add('active');
             document.getElementById(tab + '-tab').classList.add('active');
+        }
+        
+        function clearRanking() {
+            if (confirm('Удалить все рекорды?')) {
+                fetch('/api/ranking/clear', {
+                    method: 'POST'
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === 'ok') {
+                        location.reload();
+                    }
+                });
+            }
         }
     </script>
 </body>
@@ -1133,7 +1225,7 @@ CHIEF_PAGE = """
 </html>
 """
 
-# 4. ИГРА 2048
+# 4. ИГРА 2048 С РЕЙТИНГОМ
 GAME_PAGE = """
 <!DOCTYPE html>
 <html>
@@ -1160,18 +1252,18 @@ GAME_PAGE = """
             font-size: 60px;
             font-weight: 700;
             color: #776e65;
-            margin-bottom: 10px;
+            margin-bottom: 5px;
         }
         .subtitle {
             color: #998a7e;
-            font-size: 16px;
-            margin-bottom: 20px;
+            font-size: 14px;
+            margin-bottom: 15px;
         }
         .score-container {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 20px;
+            margin-bottom: 15px;
         }
         .score-box {
             background: #bbada0;
@@ -1206,7 +1298,7 @@ GAME_PAGE = """
             display: grid;
             grid-template-columns: repeat(4, 1fr);
             gap: 12px;
-            margin-bottom: 20px;
+            margin-bottom: 15px;
             touch-action: none;
         }
         .cell {
@@ -1234,7 +1326,7 @@ GAME_PAGE = """
         .cell-2048 { background: #edc22e; color: #f9f6f2; font-size: 16px; }
         .cell-super { background: #3c3a32; color: #f9f6f2; font-size: 14px; }
         .game-over {
-            background: rgba(238, 228, 218, 0.9);
+            background: rgba(238, 228, 218, 0.95);
             position: absolute;
             top: 0;
             left: 0;
@@ -1245,7 +1337,7 @@ GAME_PAGE = """
             justify-content: center;
             align-items: center;
             flex-direction: column;
-            gap: 20px;
+            gap: 15px;
             backdrop-filter: blur(3px);
         }
         .game-over h2 {
@@ -1264,7 +1356,7 @@ GAME_PAGE = """
             flex-direction: column;
             align-items: center;
             gap: 8px;
-            margin-top: 15px;
+            margin-top: 10px;
         }
         .controls-row {
             display: flex;
@@ -1294,8 +1386,8 @@ GAME_PAGE = """
         }
         .info {
             color: #998a7e;
-            font-size: 14px;
-            margin-top: 15px;
+            font-size: 13px;
+            margin-top: 10px;
         }
         .info kbd {
             background: #f0f0f0;
@@ -1304,8 +1396,21 @@ GAME_PAGE = """
             border: 1px solid #ccc;
             font-size: 13px;
         }
+        .ranking-link {
+            margin-top: 15px;
+            display: inline-block;
+            padding: 6px 20px;
+            background: #667eea;
+            color: white;
+            text-decoration: none;
+            border-radius: 8px;
+            font-size: 14px;
+        }
+        .ranking-link:hover {
+            background: #5a6fd6;
+        }
         .nav-links {
-            margin-top: 25px;
+            margin-top: 20px;
             display: flex;
             gap: 10px;
             justify-content: center;
@@ -1335,6 +1440,93 @@ GAME_PAGE = """
         .nav-links a.chief-link:hover {
             background: #d9445a;
         }
+        .nav-links a.ranking-link-nav {
+            background: #f39c12;
+        }
+        .nav-links a.ranking-link-nav:hover {
+            background: #e67e22;
+        }
+        
+        /* Модальное окно для ввода имени */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.5);
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+        .modal.active {
+            display: flex;
+        }
+        .modal-content {
+            background: white;
+            padding: 40px;
+            border-radius: 20px;
+            max-width: 400px;
+            width: 90%;
+            text-align: center;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        }
+        .modal-content h2 {
+            font-size: 28px;
+            color: #333;
+            margin-bottom: 5px;
+        }
+        .modal-content .sub {
+            color: #888;
+            font-size: 14px;
+            margin-bottom: 20px;
+        }
+        .modal-content input {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            font-size: 18px;
+            text-align: center;
+            margin-bottom: 15px;
+        }
+        .modal-content input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        .modal-content .btn-save {
+            padding: 12px 40px;
+            background: #2ecc71;
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-size: 18px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+        .modal-content .btn-save:hover {
+            background: #27ae60;
+        }
+        .modal-content .final-score-display {
+            font-size: 32px;
+            font-weight: 700;
+            color: #667eea;
+            margin: 10px 0;
+        }
+        .modal-content .skip-btn {
+            margin-top: 10px;
+            background: none;
+            border: none;
+            color: #999;
+            cursor: pointer;
+            font-size: 13px;
+            text-decoration: underline;
+        }
+        .modal-content .skip-btn:hover {
+            color: #666;
+        }
     </style>
 </head>
 <body>
@@ -1355,7 +1547,8 @@ GAME_PAGE = """
             <div class="game-over" id="gameOver">
                 <h2>💥 Игра окончена!</h2>
                 <div class="final-score">Очки: <span id="finalScore">0</span></div>
-                <button class="btn-new" onclick="initGame()">🔄 Играть снова</button>
+                <button class="btn-new" onclick="showSaveScore()">💾 Сохранить результат</button>
+                <button class="btn-new" onclick="initGame()" style="background: #6c757d;">🔄 Играть снова</button>
             </div>
         </div>
         
@@ -1374,9 +1567,25 @@ GAME_PAGE = """
             Используйте <kbd>↑</kbd> <kbd>↓</kbd> <kbd>←</kbd> <kbd>→</kbd> или кнопки
         </div>
         
+        <a href="/admin#ranking-tab" class="ranking-link">🏆 Рейтинг</a>
+        
         <div class="nav-links">
             <a href="/client" class="client-link">📢 Вызов в обработку</a>
             <a href="/chief" class="chief-link">👔 Для шефа</a>
+            <a href="/admin" class="ranking-link-nav">🏆 Рейтинг</a>
+        </div>
+    </div>
+    
+    <!-- Модальное окно для сохранения результата -->
+    <div class="modal" id="saveModal">
+        <div class="modal-content">
+            <h2>🏆 Новый рекорд!</h2>
+            <div class="sub">Введите ваше имя для сохранения результата</div>
+            <div class="final-score-display" id="modalScore">0</div>
+            <input type="text" id="playerName" placeholder="Ваше имя..." maxlength="20" autofocus>
+            <button class="btn-save" onclick="saveScore()">💾 Сохранить</button>
+            <br>
+            <button class="skip-btn" onclick="closeModalAndContinue()">Пропустить</button>
         </div>
     </div>
 
@@ -1384,12 +1593,16 @@ GAME_PAGE = """
         let grid = [];
         let score = 0;
         let gameRunning = true;
+        let finalScore = 0;
+        let gameEnded = false;
 
         function initGame() {
             grid = Array(4).fill(null).map(() => Array(4).fill(0));
             score = 0;
             gameRunning = true;
+            gameEnded = false;
             document.getElementById('gameOver').style.display = 'none';
+            document.getElementById('saveModal').classList.remove('active');
             addRandomTile();
             addRandomTile();
             renderGrid();
@@ -1479,6 +1692,8 @@ GAME_PAGE = """
             
             if (!addRandomTile()) {
                 gameRunning = false;
+                gameEnded = true;
+                finalScore = score;
                 document.getElementById('finalScore').textContent = score;
                 document.getElementById('gameOver').style.display = 'flex';
             }
@@ -1520,6 +1735,54 @@ GAME_PAGE = """
             return { row: newRow, points: points, moved: moved };
         }
 
+        function showSaveScore() {
+            if (finalScore > 0) {
+                document.getElementById('modalScore').textContent = finalScore;
+                document.getElementById('saveModal').classList.add('active');
+                document.getElementById('playerName').value = '';
+                setTimeout(() => document.getElementById('playerName').focus(), 100);
+            }
+        }
+
+        function saveScore() {
+            const name = document.getElementById('playerName').value.trim() || 'Аноним';
+            
+            fetch('/api/game/save_score', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    name: name,
+                    score: finalScore
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'ok') {
+                    alert('✅ Результат сохранен!\nИгрок: ' + name + '\nОчки: ' + finalScore);
+                } else {
+                    alert('❌ Ошибка сохранения');
+                }
+                closeModalAndContinue();
+            })
+            .catch(() => {
+                alert('❌ Ошибка соединения');
+                closeModalAndContinue();
+            });
+        }
+
+        function closeModalAndContinue() {
+            document.getElementById('saveModal').classList.remove('active');
+            initGame();
+        }
+
+        // Нажатие Enter в поле ввода
+        document.getElementById('playerName').addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') {
+                saveScore();
+            }
+        });
+
+        // Клавиатура
         document.addEventListener('keydown', (e) => {
             if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
                 e.preventDefault();
@@ -1531,8 +1794,14 @@ GAME_PAGE = """
                 };
                 move(map[e.key]);
             }
+            if (e.key === 'r' || e.key === 'R') {
+                if (gameEnded) {
+                    initGame();
+                }
+            }
         });
 
+        // Свайп для мобильных
         let startX = 0, startY = 0;
         document.addEventListener('touchstart', (e) => {
             startX = e.touches[0].clientX;
@@ -1587,18 +1856,37 @@ def admin_page():
         'success': sum(1 for c in chief_call_log if c['status'] == 'ok'),
         'failed': sum(1 for c in chief_call_log if c['status'] == 'error')
     }
+    ranking = load_ranking()
     return render_template_string(ADMIN_PAGE,
                                   ip=LOCAL_IP,
                                   prefix=COMPUTER_PREFIX,
                                   call_log=call_log,
                                   stats=stats,
                                   chief_call_log=chief_call_log,
-                                  chief_stats=chief_stats)
+                                  chief_stats=chief_stats,
+                                  ranking=ranking)
 
 @app.route('/game')
 def game_page():
-    """Страница с игрой 2048"""
     return render_template_string(GAME_PAGE)
+
+@app.route('/api/game/save_score', methods=['POST'])
+def save_score():
+    data = request.json
+    name = data.get('name', 'Аноним')
+    score = data.get('score', 0)
+    
+    ranking = add_score(name, score)
+    return jsonify({'status': 'ok', 'ranking': ranking})
+
+@app.route('/api/ranking/clear', methods=['POST'])
+def clear_ranking():
+    save_ranking([])
+    return jsonify({'status': 'ok'})
+
+@app.route('/api/ranking')
+def get_ranking():
+    return jsonify(load_ranking())
 
 @app.route('/api/call', methods=['POST'])
 def make_call():
@@ -1699,7 +1987,7 @@ def send_msg(pc_name, message_text, log, is_chief=False):
 # ================ ЗАПУСК ================
 if __name__ == '__main__':
     print("=" * 60)
-    print("🖥️  СИСТЕМА ВЫЗОВА СПЕЦИАЛИСТОВ")
+    print("🖥️  СИСТЕМА ВЫЗОВА СПЕЦИАЛИСТОВ + 2048")
     print("=" * 60)
     print(f"📢 Форма вызова:     http://{LOCAL_IP}:8080/client")
     print(f"👔 Форма шефа:       http://{LOCAL_IP}:8080/chief")
@@ -1711,10 +1999,10 @@ if __name__ == '__main__':
     print("   ✅ Специальные окна (201-209, 204, 702)")
     print("   ✅ Админы (501-502)")
     print("   ✅ 3 группы рассылок")
-    print("   ✅ НЕТ доступа к админ-панели")
     print("=" * 60)
-    print("🎮 Игра 2048 доступна со всех страниц!")
-    print("   Управление: стрелочки или кнопки на экране")
+    print("🏆 В игре 2048 теперь есть рейтинг!")
+    print("   После окончания игры можно сохранить результат")
+    print("   Рейтинг сохраняется в файле game_ranking.json")
     print("=" * 60)
     
     threading.Timer(1.5, lambda: webbrowser.open("http://127.0.0.1:8080/admin")).start()
