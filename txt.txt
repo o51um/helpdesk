@@ -1,14 +1,1210 @@
-def send_msg_to_pc(pc_name, message_text):
-    """Отправка сообщения на один компьютер"""
-    # Заменяем переносы строк на пробелы
-    message_text = message_text.replace('\n', ' ').replace('\r', ' ')
-    # Убираем множественные пробелы
-    import re
-    message_text = re.sub(r'\s+', ' ', message_text).strip()
+from flask import Flask, render_template_string, request, jsonify
+import subprocess
+import threading
+import time
+import webbrowser
+import json
+import os
+from datetime import datetime
+import random
+
+app = Flask(__name__)
+
+# ================ КОНФИГУРАЦИЯ ================
+LOCAL_IP = "172.17.6.52"
+COMPUTER_PREFIX = "WS00301"
+COMPUTER_COUNT = 20
+
+# Файл для хранения пользователей
+USERS_FILE = "users.json"
+
+# ================ ХРАНИЛИЩЕ ================
+call_log = []
+computer_users = {}  # {pc_name: username}
+game_scores = []  # Храним рекорды
+
+# ================ ЗАГРУЗКА/СОХРАНЕНИЕ ПОЛЬЗОВАТЕЛЕЙ ================
+def load_users():
+    global computer_users
+    try:
+        with open(USERS_FILE, 'r', encoding='utf-8') as f:
+            computer_users = json.load(f)
+    except FileNotFoundError:
+        computer_users = {}
+    except:
+        computer_users = {}
+
+def save_users():
+    try:
+        with open(USERS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(computer_users, f, ensure_ascii=False, indent=2)
+    except:
+        pass
+
+load_users()
+
+# ================ ФУНКЦИЯ ПОЛУЧЕНИЯ АКТИВНОГО ПОЛЬЗОВАТЕЛЯ ================
+def get_active_user(pc_name):
+    try:
+        command = f'quser /server:{pc_name}'
+        result = subprocess.run(
+            command,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=3
+        )
+        
+        if result.returncode != 0:
+            return None, None
+        
+        lines = result.stdout.strip().split('\n')
+        if len(lines) < 2:
+            return None, None
+        
+        for line in lines[1:]:
+            parts = line.split()
+            if len(parts) >= 2:
+                username = parts[0]
+                if 'Disc' not in line and 'Выход' not in line:
+                    return username, None
+        
+        return None, None
+        
+    except subprocess.TimeoutExpired:
+        return None, None
+    except Exception:
+        return None, None
+
+def update_all_users():
+    global computer_users
+    all_pcs = [f"{COMPUTER_PREFIX}{i:02d}" for i in range(1, COMPUTER_COUNT + 1)]
     
-    # Экранируем кавычки
-    full_message = message_text.replace('"', '\\"')
+    for pc in all_pcs:
+        username, _ = get_active_user(pc)
+        if username:
+            computer_users[pc] = username
     
+    save_users()
+
+# ================ HTML СТРАНИЦЫ ================
+
+# 1. КЛИЕНТСКАЯ ФОРМА (ВЫБОР ОКНА + ТЕКСТ + ПОЛЬЗОВАТЕЛИ)
+CLIENT_PAGE = """
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>📢 Вызов специалиста</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        .container {
+            background: white;
+            border-radius: 25px;
+            padding: 40px;
+            max-width: 650px;
+            width: 100%;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            text-align: center;
+        }
+        h1 {
+            font-size: 28px;
+            color: #333;
+            margin-bottom: 5px;
+        }
+        .subtitle {
+            color: #888;
+            font-size: 14px;
+            margin-bottom: 25px;
+        }
+        .computer-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 10px;
+            margin: 20px 0;
+        }
+        .computer-btn {
+            padding: 12px 0;
+            border: 2px solid #e0e0e0;
+            border-radius: 12px;
+            background: white;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            color: #333;
+            transition: all 0.3s;
+            position: relative;
+            min-height: 70px;
+        }
+        .computer-btn:hover {
+            border-color: #667eea;
+            background: #f0f2ff;
+            transform: translateY(-2px);
+        }
+        .computer-btn.active {
+            border-color: #667eea;
+            background: #667eea;
+            color: white;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+        }
+        .computer-btn .number {
+            font-size: 20px;
+            display: block;
+        }
+        .computer-btn .pc-name {
+            font-size: 10px;
+            opacity: 0.7;
+            display: block;
+            margin-top: 2px;
+        }
+        .computer-btn .user-name {
+            font-size: 11px;
+            display: block;
+            margin-top: 4px;
+            background: #e8f5e9;
+            color: #2e7d32;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-weight: 600;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .computer-btn.active .user-name {
+            background: rgba(255,255,255,0.2);
+            color: white;
+        }
+        .computer-btn .no-user {
+            font-size: 10px;
+            display: block;
+            margin-top: 4px;
+            color: #999;
+        }
+        .computer-btn.active .no-user {
+            color: rgba(255,255,255,0.7);
+        }
+        
+        .last-update {
+            font-size: 12px;
+            color: #999;
+            margin: 10px 0;
+        }
+        
+        .message-area {
+            margin: 15px 0;
+            text-align: left;
+        }
+        .message-area label {
+            display: block;
+            font-weight: 600;
+            color: #555;
+            margin-bottom: 5px;
+            font-size: 14px;
+        }
+        .message-area textarea {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 12px;
+            font-size: 15px;
+            font-family: inherit;
+            resize: vertical;
+            min-height: 60px;
+            max-height: 120px;
+            transition: border-color 0.3s;
+        }
+        .message-area textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        .message-area .char-count {
+            text-align: right;
+            font-size: 12px;
+            color: #999;
+            margin-top: 3px;
+        }
+        
+        .selected-display {
+            padding: 12px;
+            background: #f0f2ff;
+            border-radius: 10px;
+            margin: 15px 0;
+            font-size: 16px;
+            color: #555;
+        }
+        .selected-display strong {
+            color: #667eea;
+            font-size: 20px;
+        }
+        .selected-display .selected-user {
+            color: #2e7d32;
+            font-weight: 600;
+        }
+        
+        .call-btn {
+            width: 100%;
+            padding: 18px;
+            background: linear-gradient(135deg, #ff6b6b 0%, #ee5a24 100%);
+            color: white;
+            border: none;
+            border-radius: 15px;
+            font-size: 22px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.3s;
+            margin-top: 10px;
+        }
+        .call-btn:hover:not(:disabled) {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 25px rgba(238, 90, 36, 0.5);
+        }
+        .call-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .refresh-btn {
+            margin-top: 10px;
+            padding: 8px 20px;
+            background: #6c757d;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background 0.3s;
+        }
+        .refresh-btn:hover {
+            background: #5a6268;
+        }
+        
+        .game-link {
+            margin-top: 15px;
+            display: block;
+        }
+        .game-link a {
+            color: #667eea;
+            text-decoration: none;
+            font-weight: 600;
+            padding: 8px 20px;
+            border: 2px solid #667eea;
+            border-radius: 10px;
+            transition: all 0.3s;
+        }
+        .game-link a:hover {
+            background: #667eea;
+            color: white;
+        }
+        
+        #status {
+            margin-top: 15px;
+            padding: 12px;
+            border-radius: 10px;
+            font-weight: 600;
+            display: none;
+        }
+        #status.success {
+            display: block;
+            background: #d4edda;
+            color: #155724;
+        }
+        #status.error {
+            display: block;
+            background: #f8d7da;
+            color: #721c24;
+        }
+        
+        .loading {
+            opacity: 0.5;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📢 Вызов в обработку</h1>
+        <div class="subtitle">Выберите окно, напишите сообщение и нажмите "Позвать"</div>
+        
+        <div class="last-update">
+            🟢 Обновлено: <span id="updateTime">{{ update_time }}</span>
+            <button class="refresh-btn" onclick="refreshUsers()">🔄 Обновить</button>
+        </div>
+        
+        <div class="computer-grid" id="computerGrid">
+            {% for i in range(1, 21) %}
+            {% set pc_name = prefix + "%02d"|format(i) %}
+            {% set user = users.get(pc_name, None) %}
+            <button class="computer-btn" onclick="selectPC({{ i }})" id="pc_{{ i }}">
+                <span class="number">{{ "%02d"|format(i) }}</span>
+                <span class="pc-name">{{ pc_name }}</span>
+                {% if user %}
+                <span class="user-name">👤 {{ user }}</span>
+                {% else %}
+                <span class="no-user">⚪ свободен</span>
+                {% endif %}
+            </button>
+            {% endfor %}
+        </div>
+        
+        <div class="message-area">
+            <label for="messageInput">💬 Сообщение для специалиста:</label>
+            <textarea id="messageInput" placeholder="Например: Срочно подойдите, проблема с печатью..." maxlength="200"></textarea>
+            <div class="char-count"><span id="charCount">0</span>/200</div>
+        </div>
+        
+        <div class="selected-display">
+            Выбрано: <strong id="selectedDisplay">не выбрано</strong>
+            <span id="selectedUser"></span>
+        </div>
+        
+        <button class="call-btn" id="callBtn" onclick="makeCall()" disabled>
+            🔔 ПОЗВАТЬ
+        </button>
+        
+        <div id="status"></div>
+        
+        <div class="game-link">
+            <a href="/game" target="_blank">🎮 Поиграть в 2048</a>
+        </div>
+    </div>
+
+    <script>
+        let selectedPC = null;
+        let selectedUser = null;
+        
+        document.getElementById('messageInput').addEventListener('input', function() {
+            document.getElementById('charCount').textContent = this.value.length;
+        });
+        
+        function selectPC(num) {
+            document.querySelectorAll('.computer-btn').forEach(btn => btn.classList.remove('active'));
+            const btn = document.getElementById('pc_' + num);
+            btn.classList.add('active');
+            selectedPC = num;
+            
+            const userSpan = btn.querySelector('.user-name');
+            selectedUser = userSpan ? userSpan.textContent.replace('👤 ', '') : null;
+            
+            const pcName = '{{ prefix }}' + String(num).padStart(2, '0');
+            let displayText = pcName;
+            if (selectedUser) {
+                document.getElementById('selectedUser').textContent = '👤 ' + selectedUser;
+                document.getElementById('selectedUser').style.color = '#2e7d32';
+            } else {
+                document.getElementById('selectedUser').textContent = ' (свободен)';
+                document.getElementById('selectedUser').style.color = '#999';
+            }
+            document.getElementById('selectedDisplay').textContent = displayText;
+            document.getElementById('callBtn').disabled = false;
+            document.getElementById('status').style.display = 'none';
+        }
+        
+        function refreshUsers() {
+            const grid = document.getElementById('computerGrid');
+            grid.classList.add('loading');
+            
+            fetch('/api/refresh_users', {
+                method: 'POST'
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'ok') {
+                    document.getElementById('updateTime').textContent = data.time;
+                    location.reload();
+                }
+            })
+            .catch(() => {
+                grid.classList.remove('loading');
+            });
+        }
+        
+        function makeCall() {
+            if (!selectedPC) return;
+            
+            const callBtn = document.getElementById('callBtn');
+            const statusDiv = document.getElementById('status');
+            const message = document.getElementById('messageInput').value.trim();
+            
+            callBtn.disabled = true;
+            callBtn.textContent = '⏳ Отправка...';
+            
+            fetch('/api/call', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                    pc: selectedPC,
+                    message: message,
+                    user: selectedUser
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'ok') {
+                    statusDiv.className = 'success';
+                    statusDiv.textContent = '✅ ' + data.message;
+                    document.getElementById('messageInput').value = '';
+                    document.getElementById('charCount').textContent = '0';
+                } else {
+                    statusDiv.className = 'error';
+                    statusDiv.textContent = '❌ ' + data.message;
+                }
+                statusDiv.style.display = 'block';
+                
+                callBtn.disabled = false;
+                callBtn.textContent = '🔔 ПОЗВАТЬ';
+                
+                setTimeout(() => {
+                    statusDiv.style.display = 'none';
+                }, 5000);
+            })
+            .catch(() => {
+                statusDiv.className = 'error';
+                statusDiv.textContent = '❌ Ошибка соединения';
+                statusDiv.style.display = 'block';
+                callBtn.disabled = false;
+                callBtn.textContent = '🔔 ПОЗВАТЬ';
+            });
+        }
+    </script>
+</body>
+</html>
+"""
+
+# 2. АДМИН-ПАНЕЛЬ
+ADMIN_PAGE = """
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>👨‍💼 Админ-панель</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #f0f2f5;
+            padding: 20px;
+        }
+        .container { max-width: 1000px; margin: 0 auto; }
+        h1 { color: #333; margin-bottom: 20px; }
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        .stat-card {
+            background: white;
+            padding: 20px;
+            border-radius: 15px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            text-align: center;
+        }
+        .stat-card .number {
+            font-size: 32px;
+            font-weight: 700;
+            color: #667eea;
+        }
+        .stat-card .label {
+            color: #888;
+            font-size: 14px;
+        }
+        
+        .users-grid {
+            background: white;
+            padding: 20px;
+            border-radius: 15px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        .users-grid h2 {
+            font-size: 18px;
+            color: #333;
+            margin-bottom: 15px;
+        }
+        .user-list {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 10px;
+        }
+        .user-item {
+            padding: 10px 15px;
+            background: #f8f9fa;
+            border-radius: 10px;
+            border-left: 4px solid #4CAF50;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .user-item .pc {
+            font-weight: 600;
+            color: #667eea;
+        }
+        .user-item .user {
+            color: #333;
+        }
+        .user-item .empty {
+            color: #999;
+            font-style: italic;
+        }
+        
+        .log {
+            background: white;
+            padding: 20px;
+            border-radius: 15px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .log h2 {
+            font-size: 18px;
+            color: #333;
+            margin-bottom: 15px;
+        }
+        .log .entry {
+            padding: 10px 0;
+            border-bottom: 1px solid #eee;
+            font-size: 14px;
+        }
+        .log .entry:last-child {
+            border-bottom: none;
+        }
+        .log .entry .time {
+            color: #999;
+            margin-right: 15px;
+        }
+        .log .entry .pc {
+            font-weight: 600;
+            color: #667eea;
+        }
+        .log .entry .user {
+            color: #2e7d32;
+            font-weight: 500;
+        }
+        .log .entry .status-ok { color: #28a745; font-weight: 600; }
+        .log .entry .status-err { color: #dc3545; font-weight: 600; }
+        .log .entry .msg-text {
+            display: block;
+            color: #555;
+            font-style: italic;
+            margin-top: 5px;
+            margin-left: 70px;
+            background: #f8f9fa;
+            padding: 5px 12px;
+            border-radius: 8px;
+            font-size: 13px;
+            border-left: 3px solid #667eea;
+        }
+        .log .empty {
+            color: #999;
+            text-align: center;
+            padding: 20px;
+        }
+        
+        .links {
+            display: flex;
+            gap: 15px;
+            margin-top: 20px;
+            flex-wrap: wrap;
+        }
+        .links a {
+            display: inline-block;
+            padding: 10px 25px;
+            background: #667eea;
+            color: white;
+            text-decoration: none;
+            border-radius: 10px;
+            font-weight: 600;
+            transition: background 0.3s;
+        }
+        .links a:hover {
+            background: #5a6fd6;
+        }
+        .links a.game-link {
+            background: #ff6b6b;
+        }
+        .links a.game-link:hover {
+            background: #ee5a24;
+        }
+        .links a.refresh-link {
+            background: #6c757d;
+        }
+        .links a.refresh-link:hover {
+            background: #5a6268;
+        }
+        
+        .update-info {
+            font-size: 13px;
+            color: #888;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>👨‍💼 Админ-панель</h1>
+        
+        <div class="stats">
+            <div class="stat-card">
+                <div class="number">{{ stats.total }}</div>
+                <div class="label">Всего вызовов</div>
+            </div>
+            <div class="stat-card">
+                <div class="number">{{ stats.success }}</div>
+                <div class="label">Успешных</div>
+            </div>
+            <div class="stat-card">
+                <div class="number">{{ stats.failed }}</div>
+                <div class="label">Ошибок</div>
+            </div>
+            <div class="stat-card">
+                <div class="number">{{ stats.online }}</div>
+                <div class="label">👤 Пользователей онлайн</div>
+            </div>
+        </div>
+        
+        <div class="users-grid">
+            <h2>👤 Кто за каким компьютером</h2>
+            <div class="user-list">
+                {% for pc, user in users.items() %}
+                <div class="user-item">
+                    <span class="pc">{{ pc }}</span>
+                    <span class="user">👤 {{ user }}</span>
+                </div>
+                {% else %}
+                <div class="user-item">
+                    <span class="pc">Нет данных</span>
+                    <span class="empty">⚪ никто не активен</span>
+                </div>
+                {% endfor %}
+            </div>
+            <div class="update-info">
+                🕐 Обновлено: {{ update_time }}
+                <a href="/admin" style="margin-left:15px; color:#667eea; text-decoration:none;">🔄 Обновить</a>
+            </div>
+        </div>
+        
+        <div class="log">
+            <h2>📋 История вызовов</h2>
+            {% if call_log %}
+                {% for entry in call_log[::-1] %}
+                <div class="entry">
+                    <span class="time">{{ entry.time }}</span>
+                    <span class="pc">{{ entry.pc }}</span>
+                    {% if entry.user %}
+                    <span class="user">({{ entry.user }})</span>
+                    {% endif %}
+                    — 
+                    <span class="{% if entry.status == 'ok' %}status-ok{% else %}status-err{% endif %}">
+                        {{ entry.message }}
+                    </span>
+                    {% if entry.text %}
+                    <span class="msg-text">💬 {{ entry.text }}</span>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            {% else %}
+                <div class="empty">📭 Вызовов пока нет</div>
+            {% endif %}
+        </div>
+        
+        <div class="links">
+            <a href="/client">📢 Форма вызова</a>
+            <a href="/game" class="game-link">🎮 Играть в 2048</a>
+            <a href="/admin" class="refresh-link">🔄 Обновить</a>
+        </div>
+    </div>
+</body>
+</html>
+"""
+
+# 3. ИГРА 2048
+GAME_PAGE = """
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>🎮 2048</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #faf8ef;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container {
+            max-width: 500px;
+            width: 100%;
+            text-align: center;
+        }
+        h1 {
+            font-size: 60px;
+            font-weight: 700;
+            color: #776e65;
+            margin-bottom: 10px;
+        }
+        .subtitle {
+            color: #998a7e;
+            font-size: 16px;
+            margin-bottom: 20px;
+        }
+        .score-container {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        .score-box {
+            background: #bbada0;
+            color: white;
+            padding: 10px 25px;
+            border-radius: 8px;
+            font-size: 18px;
+            font-weight: 700;
+        }
+        .score-box .score-value {
+            font-size: 28px;
+            display: block;
+        }
+        .btn-new {
+            background: #8f7a66;
+            color: white;
+            border: none;
+            padding: 12px 30px;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+        .btn-new:hover {
+            background: #9f8b76;
+        }
+        .grid {
+            background: #bbada0;
+            border-radius: 8px;
+            padding: 12px;
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 12px;
+            margin-bottom: 20px;
+            touch-action: none;
+        }
+        .cell {
+            background: rgba(238, 228, 218, 0.35);
+            border-radius: 6px;
+            aspect-ratio: 1;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 24px;
+            font-weight: 700;
+            color: #776e65;
+            transition: all 0.15s ease;
+        }
+        .cell-2 { background: #eee4da; }
+        .cell-4 { background: #ede0c8; }
+        .cell-8 { background: #f2b179; color: #f9f6f2; }
+        .cell-16 { background: #f59563; color: #f9f6f2; }
+        .cell-32 { background: #f67c5f; color: #f9f6f2; }
+        .cell-64 { background: #f65e3b; color: #f9f6f2; }
+        .cell-128 { background: #edcf72; color: #f9f6f2; font-size: 20px; }
+        .cell-256 { background: #edcc61; color: #f9f6f2; font-size: 20px; }
+        .cell-512 { background: #edc850; color: #f9f6f2; font-size: 20px; }
+        .cell-1024 { background: #edc53f; color: #f9f6f2; font-size: 16px; }
+        .cell-2048 { background: #edc22e; color: #f9f6f2; font-size: 16px; }
+        .cell-super { background: #3c3a32; color: #f9f6f2; font-size: 14px; }
+        .game-over {
+            background: rgba(238, 228, 218, 0.9);
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            border-radius: 8px;
+            display: none;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+            gap: 20px;
+            backdrop-filter: blur(3px);
+        }
+        .game-over h2 {
+            font-size: 40px;
+            color: #776e65;
+        }
+        .game-over .final-score {
+            font-size: 20px;
+            color: #998a7e;
+        }
+        .grid-wrapper {
+            position: relative;
+        }
+        .controls {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+            margin-top: 15px;
+        }
+        .controls-row {
+            display: flex;
+            gap: 8px;
+        }
+        .control-btn {
+            width: 60px;
+            height: 60px;
+            background: #cdc1b4;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 28px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .control-btn:hover {
+            background: #b8aa9b;
+        }
+        .control-btn:active {
+            transform: scale(0.95);
+        }
+        @media (min-width: 768px) {
+            .controls {
+                display: none;
+            }
+        }
+        .info {
+            color: #998a7e;
+            font-size: 14px;
+            margin-top: 15px;
+        }
+        .info kbd {
+            background: #f0f0f0;
+            padding: 2px 10px;
+            border-radius: 4px;
+            border: 1px solid #ccc;
+            font-size: 13px;
+        }
+        .back-link {
+            display: inline-block;
+            margin-top: 20px;
+            color: #667eea;
+            text-decoration: none;
+            font-weight: 600;
+        }
+        .back-link:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>2048</h1>
+        <div class="subtitle">Соединяйте плитки и наберите 2048!</div>
+        
+        <div class="score-container">
+            <div class="score-box">
+                Очки
+                <span class="score-value" id="score">0</span>
+            </div>
+            <button class="btn-new" onclick="initGame()">🔄 Новая игра</button>
+        </div>
+        
+        <div class="grid-wrapper">
+            <div class="grid" id="grid"></div>
+            <div class="game-over" id="gameOver">
+                <h2>💥 Игра окончена!</h2>
+                <div class="final-score">Очки: <span id="finalScore">0</span></div>
+                <button class="btn-new" onclick="initGame()">🔄 Играть снова</button>
+            </div>
+        </div>
+        
+        <div class="controls">
+            <div class="controls-row">
+                <button class="control-btn" onclick="move('up')">↑</button>
+            </div>
+            <div class="controls-row">
+                <button class="control-btn" onclick="move('left')">←</button>
+                <button class="control-btn" onclick="move('down')">↓</button>
+                <button class="control-btn" onclick="move('right')">→</button>
+            </div>
+        </div>
+        
+        <div class="info">
+            Используйте <kbd>↑</kbd> <kbd>↓</kbd> <kbd>←</kbd> <kbd>→</kbd> или кнопки
+        </div>
+        
+        <a href="/client" class="back-link">← Вернуться к вызову</a>
+    </div>
+
+    <script>
+        let grid = [];
+        let score = 0;
+        let gameRunning = true;
+
+        function initGame() {
+            grid = Array(4).fill(null).map(() => Array(4).fill(0));
+            score = 0;
+            gameRunning = true;
+            document.getElementById('gameOver').style.display = 'none';
+            addRandomTile();
+            addRandomTile();
+            renderGrid();
+            updateScore();
+        }
+
+        function addRandomTile() {
+            const empty = [];
+            for (let i = 0; i < 4; i++) {
+                for (let j = 0; j < 4; j++) {
+                    if (grid[i][j] === 0) empty.push([i, j]);
+                }
+            }
+            if (empty.length === 0) return false;
+            const [r, c] = empty[Math.floor(Math.random() * empty.length)];
+            grid[r][c] = Math.random() < 0.9 ? 2 : 4;
+            return true;
+        }
+
+        function renderGrid() {
+            const gridEl = document.getElementById('grid');
+            gridEl.innerHTML = '';
+            for (let i = 0; i < 4; i++) {
+                for (let j = 0; j < 4; j++) {
+                    const cell = document.createElement('div');
+                    const val = grid[i][j];
+                    cell.className = 'cell';
+                    if (val > 0) {
+                        cell.textContent = val;
+                        if (val <= 2048) {
+                            cell.classList.add('cell-' + val);
+                        } else {
+                            cell.classList.add('cell-super');
+                        }
+                    }
+                    gridEl.appendChild(cell);
+                }
+            }
+        }
+
+        function updateScore() {
+            document.getElementById('score').textContent = score;
+        }
+
+        function move(direction) {
+            if (!gameRunning) return;
+            
+            let moved = false;
+            const newGrid = grid.map(row => [...row]);
+            
+            if (direction === 'left') {
+                for (let i = 0; i < 4; i++) {
+                    const result = slideRow(grid[i]);
+                    newGrid[i] = result.row;
+                    score += result.points;
+                    if (result.moved) moved = true;
+                }
+            } else if (direction === 'right') {
+                for (let i = 0; i < 4; i++) {
+                    const result = slideRow(grid[i].slice().reverse());
+                    newGrid[i] = result.row.reverse();
+                    score += result.points;
+                    if (result.moved) moved = true;
+                }
+            } else if (direction === 'up') {
+                for (let j = 0; j < 4; j++) {
+                    const col = [grid[0][j], grid[1][j], grid[2][j], grid[3][j]];
+                    const result = slideRow(col);
+                    for (let i = 0; i < 4; i++) newGrid[i][j] = result.row[i];
+                    score += result.points;
+                    if (result.moved) moved = true;
+                }
+            } else if (direction === 'down') {
+                for (let j = 0; j < 4; j++) {
+                    const col = [grid[3][j], grid[2][j], grid[1][j], grid[0][j]];
+                    const result = slideRow(col);
+                    for (let i = 0; i < 4; i++) newGrid[3 - i][j] = result.row[i];
+                    score += result.points;
+                    if (result.moved) moved = true;
+                }
+            }
+            
+            if (!moved) return;
+            
+            grid = newGrid;
+            updateScore();
+            
+            if (!addRandomTile()) {
+                gameRunning = false;
+                document.getElementById('finalScore').textContent = score;
+                document.getElementById('gameOver').style.display = 'flex';
+            }
+            
+            renderGrid();
+            
+            // Проверка победы
+            for (let i = 0; i < 4; i++) {
+                for (let j = 0; j < 4; j++) {
+                    if (grid[i][j] === 2048) {
+                        setTimeout(() => alert('🎉 Поздравляем! Вы набрали 2048!'), 300);
+                        return;
+                    }
+                }
+            }
+        }
+
+        function slideRow(row) {
+            let newRow = row.filter(val => val !== 0);
+            let points = 0;
+            let moved = false;
+            
+            for (let i = 0; i < newRow.length - 1; i++) {
+                if (newRow[i] === newRow[i + 1]) {
+                    newRow[i] *= 2;
+                    points += newRow[i];
+                    newRow.splice(i + 1, 1);
+                    moved = true;
+                }
+            }
+            
+            while (newRow.length < 4) {
+                newRow.push(0);
+            }
+            
+            // Проверяем, изменился ли ряд
+            for (let i = 0; i < 4; i++) {
+                if (row[i] !== newRow[i]) moved = true;
+            }
+            
+            return { row: newRow, points: points, moved: moved };
+        }
+
+        // Клавиатура
+        document.addEventListener('keydown', (e) => {
+            if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+                e.preventDefault();
+                const map = {
+                    'ArrowUp': 'up',
+                    'ArrowDown': 'down',
+                    'ArrowLeft': 'left',
+                    'ArrowRight': 'right'
+                };
+                move(map[e.key]);
+            }
+        });
+
+        // Свайп для мобильных
+        let startX = 0, startY = 0;
+        document.addEventListener('touchstart', (e) => {
+            startX = e.touches[0].clientX;
+            startY = e.touches[0].clientY;
+        });
+        document.addEventListener('touchmove', (e) => {
+            e.preventDefault();
+        });
+        document.addEventListener('touchend', (e) => {
+            if (startX === 0 && startY === 0) return;
+            const dx = e.changedTouches[0].clientX - startX;
+            const dy = e.changedTouches[0].clientY - startY;
+            if (Math.abs(dx) < 20 && Math.abs(dy) < 20) return;
+            if (Math.abs(dx) > Math.abs(dy)) {
+                move(dx > 0 ? 'right' : 'left');
+            } else {
+                move(dy > 0 ? 'down' : 'up');
+            }
+            startX = 0;
+            startY = 0;
+        });
+
+        // Запуск игры
+        initGame();
+    </script>
+</body>
+</html>
+"""
+
+# ================ API ЭНДПОИНТЫ ================
+
+@app.route('/client')
+def client_page():
+    update_all_users()
+    return render_template_string(
+        CLIENT_PAGE, 
+        prefix=COMPUTER_PREFIX,
+        users=computer_users,
+        update_time=datetime.now().strftime('%H:%M:%S')
+    )
+
+@app.route('/admin')
+def admin_page():
+    update_all_users()
+    online_count = len(computer_users)
+    stats = {
+        'total': len(call_log),
+        'success': sum(1 for c in call_log if c['status'] == 'ok'),
+        'failed': sum(1 for c in call_log if c['status'] == 'error'),
+        'online': online_count
+    }
+    return render_template_string(
+        ADMIN_PAGE,
+        ip=LOCAL_IP,
+        prefix=COMPUTER_PREFIX,
+        users=computer_users,
+        call_log=call_log,
+        stats=stats,
+        update_time=datetime.now().strftime('%H:%M:%S')
+    )
+
+@app.route('/game')
+def game_page():
+    """Страница с игрой 2048"""
+    return render_template_string(GAME_PAGE)
+
+@app.route('/api/refresh_users', methods=['POST', 'GET'])
+def refresh_users():
+    update_all_users()
+    return jsonify({
+        'status': 'ok',
+        'users': computer_users,
+        'time': datetime.now().strftime('%H:%M:%S')
+    })
+
+@app.route('/api/call', methods=['POST'])
+def make_call():
+    data = request.json
+    pc_number = data.get('pc')
+    message_text = data.get('message', '').strip()
+    user_name = data.get('user', '')
+    
+    if not pc_number or pc_number < 1 or pc_number > COMPUTER_COUNT:
+        return jsonify({'status': 'error', 'message': f'Неверный номер (1-{COMPUTER_COUNT})'})
+    
+    pc_name = f"{COMPUTER_PREFIX}{pc_number:02d}"
+    return send_msg(pc_name, message_text, user_name)
+
+def send_msg(pc_name, message_text, user_name=''):
+    """Отправка сообщения через msg"""
+    if message_text and user_name:
+        full_message = f"ВНИМАНИЕ! Подойдите в обработку\n\nПользователь: {user_name}\nСообщение: {message_text}"
+    elif message_text:
+        full_message = f"ВНИМАНИЕ! Подойдите в обработку\n\nСообщение: {message_text}"
+    elif user_name:
+        full_message = f"ВНИМАНИЕ! Подойдите в обработку\n\nПользователь: {user_name}"
+    else:
+        full_message = "ВНИМАНИЕ! Подойдите в обработку"
+    
+    full_message = full_message.replace('"', '\\"')
     command = f'msg * /server:{pc_name} "{full_message}"'
     
     try:
@@ -21,12 +1217,45 @@ def send_msg_to_pc(pc_name, message_text):
         )
         
         if result.returncode == 0:
-            return {'success': True, 'message': f"Успешно отправлено на {pc_name}"}
+            success = True
+            msg = f"Сообщение отправлено на {pc_name}"
         else:
+            success = False
             error = result.stderr.strip() or 'Неизвестная ошибка'
-            return {'success': False, 'message': f"Ошибка: {error}"}
+            msg = f"Ошибка: {error}"
             
     except subprocess.TimeoutExpired:
-        return {'success': False, 'message': f"Таймаут: {pc_name} не отвечает"}
+        success = False
+        msg = f"Таймаут: {pc_name} не отвечает"
     except Exception as e:
-        return {'success': False, 'message': f"Ошибка: {str(e)}"}
+        success = False
+        msg = f"Ошибка: {str(e)}"
+    
+    call_log.append({
+        'time': datetime.now().strftime('%H:%M:%S'),
+        'pc': pc_name,
+        'user': user_name if user_name else None,
+        'text': message_text if message_text else None,
+        'status': 'ok' if success else 'error',
+        'message': msg
+    })
+    
+    return jsonify({'status': 'ok' if success else 'error', 'message': msg})
+
+# ================ ЗАПУСК ================
+if __name__ == '__main__':
+    update_all_users()
+    
+    print("=" * 60)
+    print("🖥️  СИСТЕМА ВЫЗОВА СПЕЦИАЛИСТОВ + 2048")
+    print("=" * 60)
+    print(f"📢 Форма вызова:     http://{LOCAL_IP}:8080/client")
+    print(f"👨‍💼 Админ-панель:    http://127.0.0.1:8080/admin")
+    print(f"🎮 Игра 2048:        http://{LOCAL_IP}:8080/game")
+    print("=" * 60)
+    print("🎮 В игре можно отдохнуть между вызовами!")
+    print("   Управление: стрелочки или кнопки на экране")
+    print("=" * 60)
+    
+    threading.Timer(1.5, lambda: webbrowser.open("http://127.0.0.1:8080/admin")).start()
+    app.run(host='0.0.0.0', port=8080, debug=True, threaded=True)
