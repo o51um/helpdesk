@@ -1,4 +1,4 @@
-from flask import Flask, render_template_string, request, jsonify
+from flask import Flask, render_template_string, request, jsonify, session, redirect, url_for
 import subprocess
 import threading
 import time
@@ -7,16 +7,31 @@ from datetime import datetime
 import re
 import json
 import os
+from functools import wraps
 
 app = Flask(__name__)
+app.secret_key = 'your-secret-key-here-change-it-in-production'
 
 # ================ КОНФИГУРАЦИЯ ================
 LOCAL_IP = "172.17.6.52"
 COMPUTER_PREFIX = "WS00301"
 COMPUTER_COUNT = 20
 
+# Пароль для админ-панели
+ADMIN_USER = "o51um"
+ADMIN_PASS = "Platina300"
+
 # Файл для хранения рейтингов
 RANKING_FILE = "game_ranking.json"
+
+# ================ ДЕКОРАТОР ДЛЯ АДМИНКИ ================
+def login_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not session.get('logged_in'):
+            return redirect(url_for('login_page'))
+        return f(*args, **kwargs)
+    return decorated_function
 
 # ================ КОНФИГУРАЦИЯ ДЛЯ ШЕФА ================
 CHIEF_COMPUTERS = {
@@ -78,7 +93,6 @@ chief_call_log = []
 
 # ================ РЕЙТИНГИ ================
 def load_ranking():
-    """Загружает рейтинги из файла"""
     try:
         with open(RANKING_FILE, 'r', encoding='utf-8') as f:
             return json.load(f)
@@ -88,7 +102,6 @@ def load_ranking():
         return []
 
 def save_ranking(ranking):
-    """Сохраняет рейтинги в файл"""
     try:
         with open(RANKING_FILE, 'w', encoding='utf-8') as f:
             json.dump(ranking, f, ensure_ascii=False, indent=2)
@@ -96,21 +109,142 @@ def save_ranking(ranking):
         pass
 
 def add_score(name, score):
-    """Добавляет результат в рейтинг"""
     ranking = load_ranking()
     ranking.append({
         'name': name,
         'score': score,
         'date': datetime.now().strftime('%d.%m.%Y %H:%M')
     })
-    # Сортируем по убыванию очков
     ranking.sort(key=lambda x: x['score'], reverse=True)
-    # Оставляем только топ-50
     ranking = ranking[:50]
     save_ranking(ranking)
     return ranking
 
 # ================ HTML СТРАНИЦЫ ================
+
+# 0. СТРАНИЦА ВХОДА
+LOGIN_PAGE = """
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>🔐 Вход в админ-панель</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        .container {
+            background: white;
+            border-radius: 25px;
+            padding: 40px;
+            max-width: 400px;
+            width: 100%;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        }
+        h1 {
+            text-align: center;
+            color: #333;
+            font-size: 28px;
+            margin-bottom: 5px;
+        }
+        .subtitle {
+            text-align: center;
+            color: #888;
+            font-size: 14px;
+            margin-bottom: 30px;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        label {
+            display: block;
+            font-weight: 600;
+            color: #555;
+            margin-bottom: 8px;
+            font-size: 14px;
+        }
+        input {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 12px;
+            font-size: 16px;
+            transition: border-color 0.3s;
+        }
+        input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        button {
+            width: 100%;
+            padding: 14px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 12px;
+            font-size: 18px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
+        }
+        #error {
+            margin-top: 15px;
+            padding: 12px;
+            border-radius: 10px;
+            background: #f8d7da;
+            color: #721c24;
+            text-align: center;
+            font-weight: 600;
+            display: none;
+        }
+        .back-link {
+            display: block;
+            text-align: center;
+            margin-top: 20px;
+            color: #667eea;
+            text-decoration: none;
+            font-size: 14px;
+        }
+        .back-link:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔐 Вход</h1>
+        <div class="subtitle">Введите данные для доступа к админ-панели</div>
+        
+        <form method="POST" action="/login">
+            <div class="form-group">
+                <label>👤 Пользователь</label>
+                <input type="text" name="username" placeholder="Введите логин" required autofocus>
+            </div>
+            <div class="form-group">
+                <label>🔑 Пароль</label>
+                <input type="password" name="password" placeholder="Введите пароль" required>
+            </div>
+            <button type="submit">🚪 Войти</button>
+        </form>
+        
+        <div id="error">{{ error }}</div>
+        
+        <a href="/client" class="back-link">← Вернуться к форме вызова</a>
+    </div>
+</body>
+</html>
+"""
 
 # 1. КЛИЕНТСКАЯ ФОРМА
 CLIENT_PAGE = """
@@ -307,6 +441,12 @@ CLIENT_PAGE = """
         .nav-links a.game-link:hover {
             background: #27ae60;
         }
+        .nav-links a.admin-link {
+            background: #f39c12;
+        }
+        .nav-links a.admin-link:hover {
+            background: #e67e22;
+        }
     </style>
 </head>
 <body>
@@ -341,8 +481,8 @@ CLIENT_PAGE = """
         
         <div class="nav-links">
             <a href="/chief" class="chief-link">👔 Для шефа</a>
-            <a href="/admin">👨‍💼 Админ-панель</a>
             <a href="/game" class="game-link">🎮 2048</a>
+            <a href="/admin" class="admin-link">👨‍💼 Админ-панель</a>
         </div>
     </div>
  
@@ -415,7 +555,7 @@ CLIENT_PAGE = """
 </html>
 """
 
-# 2. АДМИН-ПАНЕЛЬ
+# 2. АДМИН-ПАНЕЛЬ (с защитой)
 ADMIN_PAGE = """
 <!DOCTYPE html>
 <html>
@@ -430,7 +570,27 @@ ADMIN_PAGE = """
             padding: 20px;
         }
         .container { max-width: 1000px; margin: 0 auto; }
-        h1 { color: #333; margin-bottom: 20px; }
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        h1 { color: #333; }
+        .logout-btn {
+            padding: 8px 20px;
+            background: #dc3545;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: background 0.3s;
+        }
+        .logout-btn:hover {
+            background: #c82333;
+        }
         .stats {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -530,6 +690,12 @@ ADMIN_PAGE = """
         .links a.game-link:hover {
             background: #27ae60;
         }
+        .links a.client-link {
+            background: #6c757d;
+        }
+        .links a.client-link:hover {
+            background: #5a6268;
+        }
         .tabs {
             display: flex;
             gap: 5px;
@@ -556,11 +722,45 @@ ADMIN_PAGE = """
         .tab-content.active {
             display: block;
         }
+        .ranking-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        .ranking-table th {
+            padding: 12px;
+            text-align: left;
+            background: #f8f9fa;
+            font-weight: 600;
+            color: #555;
+        }
+        .ranking-table td {
+            padding: 10px 12px;
+            border-bottom: 1px solid #eee;
+        }
+        .ranking-table tr:hover td {
+            background: #f8f9fa;
+        }
+        .clear-ranking-btn {
+            padding: 8px 20px;
+            background: #dc3545;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background 0.3s;
+        }
+        .clear-ranking-btn:hover {
+            background: #c82333;
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>👨‍💼 Админ-панель</h1>
+        <div class="header">
+            <h1>👨‍💼 Админ-панель</h1>
+            <a href="/logout" class="logout-btn">🚪 Выйти</a>
+        </div>
         
         <div class="tabs">
             <button class="tab active" onclick="showTab('client')">📋 Вызовы в обработку</button>
@@ -647,30 +847,28 @@ ADMIN_PAGE = """
         <div id="ranking-tab" class="tab-content">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
                 <h2>🏆 Рейтинг игроков 2048</h2>
-                <button onclick="clearRanking()" style="padding: 8px 20px; background: #dc3545; color: white; border: none; border-radius: 8px; cursor: pointer;">
-                    🗑️ Очистить рейтинг
-                </button>
+                <button class="clear-ranking-btn" onclick="clearRanking()">🗑️ Очистить рейтинг</button>
             </div>
             <div id="rankingList">
                 {% if ranking %}
-                    <table style="width:100%; border-collapse: collapse;">
+                    <table class="ranking-table">
                         <thead>
-                            <tr style="background: #f8f9fa;">
-                                <th style="padding: 10px; text-align: left;">#</th>
-                                <th style="padding: 10px; text-align: left;">Игрок</th>
-                                <th style="padding: 10px; text-align: right;">Очки</th>
-                                <th style="padding: 10px; text-align: right;">Дата</th>
+                            <tr>
+                                <th>#</th>
+                                <th>Игрок</th>
+                                <th style="text-align: right;">Очки</th>
+                                <th style="text-align: right;">Дата</th>
                             </tr>
                         </thead>
                         <tbody>
                             {% for entry in ranking %}
-                            <tr style="border-bottom: 1px solid #eee;">
-                                <td style="padding: 10px; font-weight: 700; color: {% if loop.index == 1 %}gold{% elif loop.index == 2 %}silver{% elif loop.index == 3 %}bronze{% else %}#333{% endif %};">
+                            <tr>
+                                <td style="font-weight: 700; color: {% if loop.index == 1 %}gold{% elif loop.index == 2 %}silver{% elif loop.index == 3 %}bronze{% else %}#333{% endif %};">
                                     {% if loop.index == 1 %}🥇{% elif loop.index == 2 %}🥈{% elif loop.index == 3 %}🥉{% else %}{{ loop.index }}{% endif %}
                                 </td>
-                                <td style="padding: 10px; font-weight: 600;">{{ entry.name }}</td>
-                                <td style="padding: 10px; text-align: right; font-weight: 700; color: #667eea;">{{ entry.score }}</td>
-                                <td style="padding: 10px; text-align: right; color: #999; font-size: 13px;">{{ entry.date }}</td>
+                                <td style="font-weight: 600;">{{ entry.name }}</td>
+                                <td style="text-align: right; font-weight: 700; color: #667eea;">{{ entry.score }}</td>
+                                <td style="text-align: right; color: #999; font-size: 13px;">{{ entry.date }}</td>
                             </tr>
                             {% endfor %}
                         </tbody>
@@ -682,10 +880,9 @@ ADMIN_PAGE = """
         </div>
         
         <div class="links">
-            <a href="/client">📢 Форма вызова</a>
-            <a href="/chief" style="background: #ff6b6b;">👔 Форма шефа</a>
+            <a href="/client" class="client-link">📢 Форма вызова</a>
+            <a href="/chief" class="test-link">👔 Форма шефа</a>
             <a href="/game" class="game-link">🎮 2048</a>
-            <a href="/admin" style="background: #6c757d;">🔄 Обновить</a>
         </div>
     </div>
  
@@ -1225,7 +1422,7 @@ CHIEF_PAGE = """
 </html>
 """
 
-# 4. ИГРА 2048 С РЕЙТИНГОМ
+# 4. ИГРА 2048
 GAME_PAGE = """
 <!DOCTYPE html>
 <html>
@@ -1440,14 +1637,8 @@ GAME_PAGE = """
         .nav-links a.chief-link:hover {
             background: #d9445a;
         }
-        .nav-links a.ranking-link-nav {
-            background: #f39c12;
-        }
-        .nav-links a.ranking-link-nav:hover {
-            background: #e67e22;
-        }
         
-        /* Модальное окно для ввода имени */
+        /* Модальное окно */
         .modal {
             display: none;
             position: fixed;
@@ -1567,16 +1758,14 @@ GAME_PAGE = """
             Используйте <kbd>↑</kbd> <kbd>↓</kbd> <kbd>←</kbd> <kbd>→</kbd> или кнопки
         </div>
         
-        <a href="/admin#ranking-tab" class="ranking-link">🏆 Рейтинг</a>
-        
         <div class="nav-links">
             <a href="/client" class="client-link">📢 Вызов в обработку</a>
             <a href="/chief" class="chief-link">👔 Для шефа</a>
-            <a href="/admin" class="ranking-link-nav">🏆 Рейтинг</a>
+            <a href="/admin" class="ranking-link">🏆 Рейтинг</a>
         </div>
     </div>
     
-    <!-- Модальное окно для сохранения результата -->
+    <!-- Модальное окно -->
     <div class="modal" id="saveModal">
         <div class="modal-content">
             <h2>🏆 Новый рекорд!</h2>
@@ -1758,7 +1947,7 @@ GAME_PAGE = """
             .then(response => response.json())
             .then(data => {
                 if (data.status === 'ok') {
-                    alert('✅ Результат сохранен!\nИгрок: ' + name + '\nОчки: ' + finalScore);
+                    alert('✅ Результат сохранен!\\nИгрок: ' + name + '\\nОчки: ' + finalScore);
                 } else {
                     alert('❌ Ошибка сохранения');
                 }
@@ -1775,14 +1964,12 @@ GAME_PAGE = """
             initGame();
         }
 
-        // Нажатие Enter в поле ввода
         document.getElementById('playerName').addEventListener('keydown', function(e) {
             if (e.key === 'Enter') {
                 saveScore();
             }
         });
 
-        // Клавиатура
         document.addEventListener('keydown', (e) => {
             if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
                 e.preventDefault();
@@ -1794,14 +1981,8 @@ GAME_PAGE = """
                 };
                 move(map[e.key]);
             }
-            if (e.key === 'r' || e.key === 'R') {
-                if (gameEnded) {
-                    initGame();
-                }
-            }
         });
 
-        // Свайп для мобильных
         let startX = 0, startY = 0;
         document.addEventListener('touchstart', (e) => {
             startX = e.touches[0].clientX;
@@ -1832,6 +2013,26 @@ GAME_PAGE = """
 
 # ================ API ЭНДПОИНТЫ ================
 
+@app.route('/')
+def index():
+    return redirect(url_for('client_page'))
+
+@app.route('/login', methods=['GET', 'POST'])
+def login_page():
+    if request.method == 'POST':
+        username = request.form.get('username', '')
+        password = request.form.get('password', '')
+        if username == ADMIN_USER and password == ADMIN_PASS:
+            session['logged_in'] = True
+            return redirect(url_for('admin_page'))
+        return render_template_string(LOGIN_PAGE, error='❌ Неверный логин или пароль')
+    return render_template_string(LOGIN_PAGE, error='')
+
+@app.route('/logout')
+def logout():
+    session.pop('logged_in', None)
+    return redirect(url_for('login_page'))
+
 @app.route('/client')
 def client_page():
     return render_template_string(CLIENT_PAGE, prefix=COMPUTER_PREFIX)
@@ -1845,6 +2046,7 @@ def chief_page():
                                   group3=CHIEF_GROUPS['group3'])
 
 @app.route('/admin')
+@login_required
 def admin_page():
     stats = {
         'total': len(call_log),
@@ -1880,6 +2082,7 @@ def save_score():
     return jsonify({'status': 'ok', 'ranking': ranking})
 
 @app.route('/api/ranking/clear', methods=['POST'])
+@login_required
 def clear_ranking():
     save_ranking([])
     return jsonify({'status': 'ok'})
@@ -1991,18 +2194,13 @@ if __name__ == '__main__':
     print("=" * 60)
     print(f"📢 Форма вызова:     http://{LOCAL_IP}:8080/client")
     print(f"👔 Форма шефа:       http://{LOCAL_IP}:8080/chief")
-    print(f"👨‍💼 Админ-панель:    http://127.0.0.1:8080/admin")
+    print(f"🔐 Админ-панель:     http://127.0.0.1:8080/admin")
+    print(f"   Логин: {ADMIN_USER}")
+    print(f"   Пароль: {ADMIN_PASS}")
     print(f"🎮 Игра 2048:        http://{LOCAL_IP}:8080/game")
     print("=" * 60)
-    print("📌 Форма шефа включает:")
-    print("   ✅ Все окна 101-120 (20 шт)")
-    print("   ✅ Специальные окна (201-209, 204, 702)")
-    print("   ✅ Админы (501-502)")
-    print("   ✅ 3 группы рассылок")
-    print("=" * 60)
-    print("🏆 В игре 2048 теперь есть рейтинг!")
+    print("🏆 В игре 2048 есть рейтинг!")
     print("   После окончания игры можно сохранить результат")
-    print("   Рейтинг сохраняется в файле game_ranking.json")
     print("=" * 60)
     
     threading.Timer(1.5, lambda: webbrowser.open("http://127.0.0.1:8080/admin")).start()
