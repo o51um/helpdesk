@@ -1,0 +1,761 @@
+# 4. ИГРА 2048 С РЕЙТИНГОМ НА СТРАНИЦЕ
+GAME_PAGE = """
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>🎮 2048</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #faf8ef;
+            display: flex;
+            justify-content: center;
+            align-items: flex-start;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1200px;
+            width: 100%;
+            display: flex;
+            gap: 40px;
+            align-items: flex-start;
+            padding-top: 20px;
+        }
+        
+        /* Левая колонка - игра */
+        .game-col {
+            flex: 0 0 500px;
+            text-align: center;
+        }
+        .game-col h1 {
+            font-size: 60px;
+            font-weight: 700;
+            color: #776e65;
+            margin-bottom: 5px;
+        }
+        .game-col .subtitle {
+            color: #998a7e;
+            font-size: 14px;
+            margin-bottom: 15px;
+        }
+        .score-container {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+        .score-box {
+            background: #bbada0;
+            color: white;
+            padding: 10px 25px;
+            border-radius: 8px;
+            font-size: 18px;
+            font-weight: 700;
+        }
+        .score-box .score-value {
+            font-size: 28px;
+            display: block;
+        }
+        .btn-new {
+            background: #8f7a66;
+            color: white;
+            border: none;
+            padding: 12px 30px;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+        .btn-new:hover {
+            background: #9f8b76;
+        }
+        .grid {
+            background: #bbada0;
+            border-radius: 8px;
+            padding: 12px;
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 12px;
+            margin-bottom: 15px;
+            touch-action: none;
+        }
+        .cell {
+            background: rgba(238, 228, 218, 0.35);
+            border-radius: 6px;
+            aspect-ratio: 1;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 24px;
+            font-weight: 700;
+            color: #776e65;
+            transition: all 0.15s ease;
+        }
+        .cell-2 { background: #eee4da; }
+        .cell-4 { background: #ede0c8; }
+        .cell-8 { background: #f2b179; color: #f9f6f2; }
+        .cell-16 { background: #f59563; color: #f9f6f2; }
+        .cell-32 { background: #f67c5f; color: #f9f6f2; }
+        .cell-64 { background: #f65e3b; color: #f9f6f2; }
+        .cell-128 { background: #edcf72; color: #f9f6f2; font-size: 20px; }
+        .cell-256 { background: #edcc61; color: #f9f6f2; font-size: 20px; }
+        .cell-512 { background: #edc850; color: #f9f6f2; font-size: 20px; }
+        .cell-1024 { background: #edc53f; color: #f9f6f2; font-size: 16px; }
+        .cell-2048 { background: #edc22e; color: #f9f6f2; font-size: 16px; }
+        .cell-super { background: #3c3a32; color: #f9f6f2; font-size: 14px; }
+        .game-over {
+            background: rgba(238, 228, 218, 0.95);
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            border-radius: 8px;
+            display: none;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+            gap: 15px;
+            backdrop-filter: blur(3px);
+        }
+        .game-over h2 {
+            font-size: 40px;
+            color: #776e65;
+        }
+        .game-over .final-score {
+            font-size: 20px;
+            color: #998a7e;
+        }
+        .grid-wrapper {
+            position: relative;
+        }
+        .controls {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+            margin-top: 10px;
+        }
+        .controls-row {
+            display: flex;
+            gap: 8px;
+        }
+        .control-btn {
+            width: 60px;
+            height: 60px;
+            background: #cdc1b4;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 28px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .control-btn:hover {
+            background: #b8aa9b;
+        }
+        .control-btn:active {
+            transform: scale(0.95);
+        }
+        @media (min-width: 768px) {
+            .controls {
+                display: none;
+            }
+        }
+        .info {
+            color: #998a7e;
+            font-size: 13px;
+            margin-top: 10px;
+        }
+        .info kbd {
+            background: #f0f0f0;
+            padding: 2px 10px;
+            border-radius: 4px;
+            border: 1px solid #ccc;
+            font-size: 13px;
+        }
+        
+        /* Правая колонка - рейтинг */
+        .ranking-col {
+            flex: 1;
+            min-width: 300px;
+            background: white;
+            border-radius: 16px;
+            padding: 25px;
+            box-shadow: 0 2px 20px rgba(0,0,0,0.08);
+        }
+        .ranking-col h2 {
+            font-size: 24px;
+            color: #776e65;
+            margin-bottom: 5px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .ranking-col .ranking-subtitle {
+            color: #998a7e;
+            font-size: 13px;
+            margin-bottom: 20px;
+        }
+        .ranking-list {
+            max-height: 500px;
+            overflow-y: auto;
+        }
+        .ranking-list::-webkit-scrollbar {
+            width: 6px;
+        }
+        .ranking-list::-webkit-scrollbar-track {
+            background: #f0f0f0;
+            border-radius: 3px;
+        }
+        .ranking-list::-webkit-scrollbar-thumb {
+            background: #bbada0;
+            border-radius: 3px;
+        }
+        .rank-item {
+            display: flex;
+            align-items: center;
+            padding: 8px 12px;
+            border-radius: 8px;
+            margin-bottom: 4px;
+            transition: background 0.2s;
+        }
+        .rank-item:hover {
+            background: #f8f6f2;
+        }
+        .rank-item .rank-pos {
+            width: 35px;
+            font-weight: 700;
+            font-size: 16px;
+            color: #998a7e;
+        }
+        .rank-item .rank-pos.gold { color: #f2b179; }
+        .rank-item .rank-pos.silver { color: #cdc1b4; }
+        .rank-item .rank-pos.bronze { color: #d4a574; }
+        .rank-item .rank-name {
+            flex: 1;
+            font-weight: 600;
+            color: #776e65;
+        }
+        .rank-item .rank-score {
+            font-weight: 700;
+            color: #667eea;
+            font-size: 16px;
+        }
+        .rank-item .rank-date {
+            font-size: 11px;
+            color: #bbb;
+            margin-left: 15px;
+        }
+        .rank-empty {
+            text-align: center;
+            color: #bbb;
+            padding: 40px 0;
+            font-size: 16px;
+        }
+        .clear-rank-btn {
+            margin-top: 15px;
+            padding: 6px 16px;
+            background: none;
+            border: 1px solid #e0e0e0;
+            border-radius: 6px;
+            color: #999;
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        .clear-rank-btn:hover {
+            background: #f8d7da;
+            border-color: #dc3545;
+            color: #dc3545;
+        }
+        
+        /* Модальное окно */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.5);
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+        .modal.active {
+            display: flex;
+        }
+        .modal-content {
+            background: white;
+            padding: 40px;
+            border-radius: 20px;
+            max-width: 400px;
+            width: 90%;
+            text-align: center;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        }
+        .modal-content h2 {
+            font-size: 28px;
+            color: #333;
+            margin-bottom: 5px;
+        }
+        .modal-content .sub {
+            color: #888;
+            font-size: 14px;
+            margin-bottom: 20px;
+        }
+        .modal-content input {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            font-size: 18px;
+            text-align: center;
+            margin-bottom: 15px;
+        }
+        .modal-content input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        .modal-content .btn-save {
+            padding: 12px 40px;
+            background: #2ecc71;
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-size: 18px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+        .modal-content .btn-save:hover {
+            background: #27ae60;
+        }
+        .modal-content .final-score-display {
+            font-size: 32px;
+            font-weight: 700;
+            color: #667eea;
+            margin: 10px 0;
+        }
+        .modal-content .skip-btn {
+            margin-top: 10px;
+            background: none;
+            border: none;
+            color: #999;
+            cursor: pointer;
+            font-size: 13px;
+            text-decoration: underline;
+        }
+        .modal-content .skip-btn:hover {
+            color: #666;
+        }
+        
+        /* Адаптив */
+        @media (max-width: 900px) {
+            .container {
+                flex-direction: column;
+                align-items: center;
+                gap: 30px;
+            }
+            .game-col {
+                flex: 0 0 auto;
+                width: 100%;
+                max-width: 500px;
+            }
+            .ranking-col {
+                width: 100%;
+                max-width: 500px;
+            }
+        }
+        @media (max-width: 500px) {
+            .game-col h1 {
+                font-size: 40px;
+            }
+            .grid {
+                padding: 8px;
+                gap: 8px;
+            }
+            .cell {
+                font-size: 18px;
+            }
+            .cell-128, .cell-256, .cell-512 {
+                font-size: 16px;
+            }
+            .cell-1024, .cell-2048 {
+                font-size: 12px;
+            }
+            .score-container {
+                flex-wrap: wrap;
+                gap: 10px;
+                justify-content: center;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Левая колонка - игра -->
+        <div class="game-col">
+            <h1>2048</h1>
+            <div class="subtitle">Соединяйте плитки и наберите 2048!</div>
+            
+            <div class="score-container">
+                <div class="score-box">
+                    Очки
+                    <span class="score-value" id="score">0</span>
+                </div>
+                <button class="btn-new" onclick="initGame()">🔄 Новая игра</button>
+            </div>
+            
+            <div class="grid-wrapper">
+                <div class="grid" id="grid"></div>
+                <div class="game-over" id="gameOver">
+                    <h2>💥 Игра окончена!</h2>
+                    <div class="final-score">Очки: <span id="finalScore">0</span></div>
+                    <button class="btn-new" onclick="showSaveScore()">💾 Сохранить результат</button>
+                    <button class="btn-new" onclick="initGame()" style="background: #6c757d;">🔄 Играть снова</button>
+                </div>
+            </div>
+            
+            <div class="controls">
+                <div class="controls-row">
+                    <button class="control-btn" onclick="move('up')">↑</button>
+                </div>
+                <div class="controls-row">
+                    <button class="control-btn" onclick="move('left')">←</button>
+                    <button class="control-btn" onclick="move('down')">↓</button>
+                    <button class="control-btn" onclick="move('right')">→</button>
+                </div>
+            </div>
+            
+            <div class="info">
+                Используйте <kbd>↑</kbd> <kbd>↓</kbd> <kbd>←</kbd> <kbd>→</kbd> или кнопки
+            </div>
+        </div>
+        
+        <!-- Правая колонка - рейтинг -->
+        <div class="ranking-col">
+            <h2>🏆 Рейтинг</h2>
+            <div class="ranking-subtitle">Лучшие результаты</div>
+            <div class="ranking-list" id="rankingList">
+                <!-- Загружается через JS -->
+            </div>
+            <button class="clear-rank-btn" onclick="clearRanking()">🗑️ Очистить рейтинг</button>
+        </div>
+    </div>
+    
+    <!-- Модальное окно -->
+    <div class="modal" id="saveModal">
+        <div class="modal-content">
+            <h2>🏆 Новый рекорд!</h2>
+            <div class="sub">Введите ваше имя для сохранения результата</div>
+            <div class="final-score-display" id="modalScore">0</div>
+            <input type="text" id="playerName" placeholder="Ваше имя..." maxlength="20" autofocus>
+            <button class="btn-save" onclick="saveScore()">💾 Сохранить</button>
+            <br>
+            <button class="skip-btn" onclick="closeModalAndContinue()">Пропустить</button>
+        </div>
+    </div>
+
+    <script>
+        let grid = [];
+        let score = 0;
+        let gameRunning = true;
+        let finalScore = 0;
+        let gameEnded = false;
+        let rankingData = [];
+
+        // ========== ИГРА ==========
+        function initGame() {
+            grid = Array(4).fill(null).map(() => Array(4).fill(0));
+            score = 0;
+            gameRunning = true;
+            gameEnded = false;
+            document.getElementById('gameOver').style.display = 'none';
+            document.getElementById('saveModal').classList.remove('active');
+            addRandomTile();
+            addRandomTile();
+            renderGrid();
+            updateScore();
+            loadRanking();
+        }
+
+        function addRandomTile() {
+            const empty = [];
+            for (let i = 0; i < 4; i++) {
+                for (let j = 0; j < 4; j++) {
+                    if (grid[i][j] === 0) empty.push([i, j]);
+                }
+            }
+            if (empty.length === 0) return false;
+            const [r, c] = empty[Math.floor(Math.random() * empty.length)];
+            grid[r][c] = Math.random() < 0.9 ? 2 : 4;
+            return true;
+        }
+
+        function renderGrid() {
+            const gridEl = document.getElementById('grid');
+            gridEl.innerHTML = '';
+            for (let i = 0; i < 4; i++) {
+                for (let j = 0; j < 4; j++) {
+                    const cell = document.createElement('div');
+                    const val = grid[i][j];
+                    cell.className = 'cell';
+                    if (val > 0) {
+                        cell.textContent = val;
+                        if (val <= 2048) {
+                            cell.classList.add('cell-' + val);
+                        } else {
+                            cell.classList.add('cell-super');
+                        }
+                    }
+                    gridEl.appendChild(cell);
+                }
+            }
+        }
+
+        function updateScore() {
+            document.getElementById('score').textContent = score;
+        }
+
+        function move(direction) {
+            if (!gameRunning) return;
+            
+            let moved = false;
+            const newGrid = grid.map(row => [...row]);
+            
+            if (direction === 'left') {
+                for (let i = 0; i < 4; i++) {
+                    const result = slideRow(grid[i]);
+                    newGrid[i] = result.row;
+                    score += result.points;
+                    if (result.moved) moved = true;
+                }
+            } else if (direction === 'right') {
+                for (let i = 0; i < 4; i++) {
+                    const result = slideRow(grid[i].slice().reverse());
+                    newGrid[i] = result.row.reverse();
+                    score += result.points;
+                    if (result.moved) moved = true;
+                }
+            } else if (direction === 'up') {
+                for (let j = 0; j < 4; j++) {
+                    const col = [grid[0][j], grid[1][j], grid[2][j], grid[3][j]];
+                    const result = slideRow(col);
+                    for (let i = 0; i < 4; i++) newGrid[i][j] = result.row[i];
+                    score += result.points;
+                    if (result.moved) moved = true;
+                }
+            } else if (direction === 'down') {
+                for (let j = 0; j < 4; j++) {
+                    const col = [grid[3][j], grid[2][j], grid[1][j], grid[0][j]];
+                    const result = slideRow(col);
+                    for (let i = 0; i < 4; i++) newGrid[3 - i][j] = result.row[i];
+                    score += result.points;
+                    if (result.moved) moved = true;
+                }
+            }
+            
+            if (!moved) return;
+            
+            grid = newGrid;
+            updateScore();
+            
+            if (!addRandomTile()) {
+                gameRunning = false;
+                gameEnded = true;
+                finalScore = score;
+                document.getElementById('finalScore').textContent = score;
+                document.getElementById('gameOver').style.display = 'flex';
+            }
+            
+            renderGrid();
+            
+            for (let i = 0; i < 4; i++) {
+                for (let j = 0; j < 4; j++) {
+                    if (grid[i][j] === 2048) {
+                        setTimeout(() => alert('🎉 Поздравляем! Вы набрали 2048!'), 300);
+                        return;
+                    }
+                }
+            }
+        }
+
+        function slideRow(row) {
+            let newRow = row.filter(val => val !== 0);
+            let points = 0;
+            let moved = false;
+            
+            for (let i = 0; i < newRow.length - 1; i++) {
+                if (newRow[i] === newRow[i + 1]) {
+                    newRow[i] *= 2;
+                    points += newRow[i];
+                    newRow.splice(i + 1, 1);
+                    moved = true;
+                }
+            }
+            
+            while (newRow.length < 4) {
+                newRow.push(0);
+            }
+            
+            for (let i = 0; i < 4; i++) {
+                if (row[i] !== newRow[i]) moved = true;
+            }
+            
+            return { row: newRow, points: points, moved: moved };
+        }
+
+        // ========== РЕЙТИНГ ==========
+        function loadRanking() {
+            fetch('/api/ranking')
+                .then(response => response.json())
+                .then(data => {
+                    rankingData = data;
+                    renderRanking();
+                })
+                .catch(() => {});
+        }
+
+        function renderRanking() {
+            const container = document.getElementById('rankingList');
+            if (!rankingData || rankingData.length === 0) {
+                container.innerHTML = '<div class="rank-empty">🏆 Пока нет рекордов<br>Станьте первым!</div>';
+                return;
+            }
+            
+            let html = '';
+            rankingData.forEach((item, index) => {
+                let posClass = '';
+                let posText = (index + 1);
+                if (index === 0) { posClass = 'gold'; posText = '🥇'; }
+                else if (index === 1) { posClass = 'silver'; posText = '🥈'; }
+                else if (index === 2) { posClass = 'bronze'; posText = '🥉'; }
+                
+                html += `
+                    <div class="rank-item">
+                        <span class="rank-pos ${posClass}">${posText}</span>
+                        <span class="rank-name">${escapeHtml(item.name)}</span>
+                        <span class="rank-score">${item.score}</span>
+                        <span class="rank-date">${item.date}</span>
+                    </div>
+                `;
+            });
+            container.innerHTML = html;
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function clearRanking() {
+            if (confirm('Удалить все рекорды?')) {
+                fetch('/api/ranking/clear', {
+                    method: 'POST'
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === 'ok') {
+                        loadRanking();
+                    }
+                });
+            }
+        }
+
+        // ========== СОХРАНЕНИЕ РЕЗУЛЬТАТА ==========
+        function showSaveScore() {
+            if (finalScore > 0) {
+                document.getElementById('modalScore').textContent = finalScore;
+                document.getElementById('saveModal').classList.add('active');
+                document.getElementById('playerName').value = '';
+                setTimeout(() => document.getElementById('playerName').focus(), 100);
+            }
+        }
+
+        function saveScore() {
+            const name = document.getElementById('playerName').value.trim() || 'Аноним';
+            
+            fetch('/api/game/save_score', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    name: name,
+                    score: finalScore
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'ok') {
+                    alert('✅ Результат сохранен!\nИгрок: ' + name + '\nОчки: ' + finalScore);
+                    loadRanking();
+                } else {
+                    alert('❌ Ошибка сохранения');
+                }
+                closeModalAndContinue();
+            })
+            .catch(() => {
+                alert('❌ Ошибка соединения');
+                closeModalAndContinue();
+            });
+        }
+
+        function closeModalAndContinue() {
+            document.getElementById('saveModal').classList.remove('active');
+            initGame();
+        }
+
+        // ========== СОБЫТИЯ ==========
+        document.getElementById('playerName').addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') {
+                saveScore();
+            }
+        });
+
+        document.addEventListener('keydown', (e) => {
+            if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+                e.preventDefault();
+                const map = {
+                    'ArrowUp': 'up',
+                    'ArrowDown': 'down',
+                    'ArrowLeft': 'left',
+                    'ArrowRight': 'right'
+                };
+                move(map[e.key]);
+            }
+        });
+
+        let startX = 0, startY = 0;
+        document.addEventListener('touchstart', (e) => {
+            startX = e.touches[0].clientX;
+            startY = e.touches[0].clientY;
+        });
+        document.addEventListener('touchmove', (e) => {
+            e.preventDefault();
+        });
+        document.addEventListener('touchend', (e) => {
+            if (startX === 0 && startY === 0) return;
+            const dx = e.changedTouches[0].clientX - startX;
+            const dy = e.changedTouches[0].clientY - startY;
+            if (Math.abs(dx) < 20 && Math.abs(dy) < 20) return;
+            if (Math.abs(dx) > Math.abs(dy)) {
+                move(dx > 0 ? 'right' : 'left');
+            } else {
+                move(dy > 0 ? 'down' : 'up');
+            }
+            startX = 0;
+            startY = 0;
+        });
+
+        // Запуск
+        initGame();
+    </script>
+</body>
+</html>
+"""
