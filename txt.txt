@@ -1,24 +1,16 @@
 @echo off
-echo Очистка ваших временных файлов (без прав админа)...
+echo УДАЛЕНИЕ ВСЕХ ФАЙЛОВ И ПАПОК ИЗ TEMP...
 
-:: Чистим только папку пользователя (она доступна всегда)
-del /f /s /q "%TEMP%\*.*" 2>nul
+:: 1. Удаляем все файлы (включая скрытые)
+del /f /s /q /a "%TEMP%\*.*" 2>nul
 
-:: Удаляем пустые папки внутри Temp
+:: 2. Удаляем все папки (рекурсивно)
 for /d %%i in ("%TEMP%\*") do (
     rmdir /s /q "%%i" 2>nul
 )
 
-:: Чистим корзину (доступна без админа)
-rd /s /q C:\$Recycle.bin 2>nul
+:: 3. Создаём папку заново (чтобы не было ошибок)
+mkdir "%TEMP%" 2>nul
 
-:: Чистим историю Проводника
-del /f /s /q "%APPDATA%\Microsoft\Windows\Recent\*.*" 2>nul
-
-:: Чистим кэш браузеров (Chrome, Edge, Firefox)
-rmdir /s /q "%LOCALAPPDATA%\Google\Chrome\User Data\Default\Cache" 2>nul
-rmdir /s /q "%LOCALAPPDATA%\Microsoft\Edge\User Data\Default\Cache" 2>nul
-rmdir /s /q "%APPDATA%\Mozilla\Firefox\Profiles\*\cache2" 2>nul
-
-echo Готово! Освобождено место в вашей папке Temp.
+echo ГОТОВО! Все файлы и папки удалены.
 pause
