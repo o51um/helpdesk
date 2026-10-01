@@ -1,3 +1,5 @@
 pytelegrambotapi==4.16.0
 python-dotenv==1.0.0
 pytz==2024.1
+
+"C:\Program Files\Common Files\Microsoft Shared\OFFICE16\Oarpmany.exe" /removereleaseinpatch "{90160000-0012-0000-1000-0000000FF1CE}" "{27882596-A8ED-4382-9C71-6CD2DD19F732}" "1033" "0"
